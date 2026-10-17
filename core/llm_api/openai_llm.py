@@ -9,11 +9,12 @@ from traceback import format_exc
 from typing import Optional, Union
 
 import attrs
-import openai
-import requests
 import tiktoken
-from openai.openai_object import OpenAIObject as OpenAICompletion
-from tenacity import retry, stop_after_attempt, wait_fixed
+from openai import AsyncOpenAI
+from openai.types import Completion
+from openai.types.chat import ChatCompletion
+from openai.types.chat.chat_completion import ChoiceLogprobs
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_fixed
 from termcolor import cprint
 
 from core.llm_api.base_llm import (
@@ -22,6 +23,10 @@ from core.llm_api.base_llm import (
     ModelAPIProtocol,
     messages_to_single_prompt,
 )
+from core.llm_api.errors import is_credit_exhaustion
+from core.llm_api.registry import estimate_cost
+from core.llm_api.registry import price_per_token as registry_price
+from core.llm_api.registry import resolve_model
 
 OAIChatPrompt = list[dict[str, str]]
 OAIBasePrompt = Union[str, list[str]]
@@ -33,33 +38,8 @@ def count_tokens(text: str) -> int:
 
 
 def price_per_token(model_id: str) -> tuple[float, float]:
-    """
-    Returns the (input token, output token) price for the given model id.
-    """
-    if model_id == "gpt-4-1106-preview":
-        prices = 0.01, 0.03
-    elif model_id == "gpt-3.5-turbo-1106":
-        prices = 0.001, 0.002
-    elif model_id.startswith("gpt-4"):
-        prices = 0.03, 0.06
-    elif model_id.startswith("gpt-4-32k"):
-        prices = 0.06, 0.12
-    elif model_id.startswith("gpt-3.5-turbo-16k"):
-        prices = 0.003, 0.004
-    elif model_id.startswith("gpt-3.5-turbo"):
-        prices = 0.0015, 0.002
-    elif model_id == "davinci-002":
-        prices = 0.002, 0.002
-    elif model_id == "babbage-002":
-        prices = 0.0004, 0.0004
-    elif model_id == "text-davinci-003" or model_id == "text-davinci-002":
-        prices = 0.02, 0.02
-    elif "ft:gpt-3.5-turbo" in model_id:
-        prices = 0.012, 0.016
-    else:
-        raise ValueError(f"Invalid model id: {model_id}")
-
-    return tuple(price / 1000 for price in prices)
+    # Unknown pricing must not prevent routing a newly configured model.
+    return registry_price(model_id) or (float("inf"), float("inf"))
 
 
 @attrs.define()
@@ -110,9 +90,17 @@ class Resource:
 @attrs.define
 class OpenAIModel(ModelAPIProtocol):
     frac_rate_limit: float
-    organization: str
+    organization: Optional[str]
     print_prompt_and_response: bool = False
     model_ids: set[str] = attrs.field(init=False, default=attrs.Factory(set))
+
+    client: AsyncOpenAI = attrs.field(
+        init=False,
+        default=attrs.Factory(
+            lambda self: AsyncOpenAI(organization=self.organization, max_retries=0),
+            takes_self=True,
+        ),
+    )
 
     # rate limit
     token_capacity: dict[str, Resource] = attrs.field(
@@ -174,34 +162,15 @@ class OpenAIModel(ModelAPIProtocol):
 
         self.model_ids.add(model_id)
 
-        # make dummy request to get token and request capacity
-        model_metadata = await self._get_dummy_response_header(model_id)
-        token_capacity = int(model_metadata["x-ratelimit-limit-tokens"])
-        request_capacity = int(model_metadata["x-ratelimit-limit-requests"])
-        print(
-            f"got capacities for model {model_id}: {token_capacity}, {request_capacity}"
+        # Configured limits avoid an extra billed probe for every new model.
+        # SPECIAL TREATMENT: provider/account limits are independent of model capability.
+        limits = resolve_model(model_id)
+        token_capacity = Resource(
+            limits.get("tokens_per_minute", 1_000_000) * self.frac_rate_limit
         )
-        tokens_consumed = token_capacity - int(
-            model_metadata["x-ratelimit-remaining-tokens"]
+        request_capacity = Resource(
+            limits.get("requests_per_minute", 60) * self.frac_rate_limit
         )
-        requests_consumed = request_capacity - int(
-            model_metadata["x-ratelimit-remaining-requests"]
-        )
-        print(
-            f"consumed capacities for model {model_id}: {tokens_consumed}, {requests_consumed}"
-        )
-        token_cap = token_capacity * self.frac_rate_limit
-        request_cap = request_capacity * self.frac_rate_limit
-        if model_id in BASE_MODELS:
-            token_cap *= (
-                10000  # openai does not track token limit so we can increase it
-            )
-
-        print(f"setting cap for model {model_id}: {token_cap}, {request_cap}")
-        token_capacity = Resource(token_cap)
-        request_capacity = Resource(request_cap)
-        token_capacity.consume(min(token_cap, tokens_consumed))
-        request_capacity.consume(min(request_cap, requests_consumed))
         self.token_capacity[model_id] = token_capacity
         self.request_capacity[model_id] = request_capacity
 
@@ -231,7 +200,8 @@ class OpenAIModel(ModelAPIProtocol):
 
                 # Make the API call outside the lock
                 return await asyncio.wait_for(
-                    self._make_api_call(prompt, model_id, start, **kwargs), timeout=120
+                    self._make_api_call(prompt, model_id, start, **kwargs),
+                    timeout=kwargs.get("timeout", 120),
                 )
 
         model_ids.sort(
@@ -253,6 +223,12 @@ class OpenAIModel(ModelAPIProtocol):
             try:
                 responses = await attempt_api_call()
             except Exception as e:
+                if is_credit_exhaustion(e):
+                    raise
+                if isinstance(e, (ValueError, TypeError)) or getattr(
+                    e, "status_code", None
+                ) in (400, 401, 403, 404, 422):
+                    raise
                 error_info = f"Exception Type: {type(e).__name__}, Error Details: {str(e)}, Traceback: {format_exc()}"
                 LOGGER.warn(
                     f"Encountered API error: {error_info}.\nRetrying now. (Attempt {i})"
@@ -271,27 +247,8 @@ class OpenAIModel(ModelAPIProtocol):
             self._print_prompt_and_response(prompt, responses)
 
         end = time.time()
-        LOGGER.debug(f"Completed call to {model_id} in {end - start}s.")
+        LOGGER.debug(f"Completed call in {end - start}s.")
         return responses
-
-
-_GPT_4_MODELS = [
-    "gpt-4",
-    "gpt-4-0314",
-    "gpt-4-0613",
-    "gpt-4-32k",
-    "gpt-4-32k-0314",
-    "gpt-4-32k-0613",
-    "gpt-4-1106-preview",
-]
-_GPT_TURBO_MODELS = [
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0613",
-    "gpt-3.5-turbo-16k",
-    "gpt-3.5-turbo-16k-0613",
-    "gpt-3.5-turbo-1106",
-]
-GPT_CHAT_MODELS = set(_GPT_4_MODELS + _GPT_TURBO_MODELS)
 
 
 class OpenAIChatModel(OpenAIModel):
@@ -299,23 +256,23 @@ class OpenAIChatModel(OpenAIModel):
         return prompt
 
     def _assert_valid_id(self, model_id: str):
-        if "ft:" in model_id:
-            model_id = model_id.split(":")[1]
-        assert model_id in GPT_CHAT_MODELS, f"Invalid model id: {model_id}"
+        spec = resolve_model(model_id)
+        if spec["provider"] != "openai" or spec["endpoint"] not in (
+            "chat",
+            "responses",
+        ):
+            raise ValueError(f"Not an OpenAI chat/responses model: {model_id}")
 
-    @retry(stop=stop_after_attempt(8), wait=wait_fixed(2))
+    @retry(
+        stop=stop_after_attempt(8),
+        wait=wait_fixed(2),
+        retry=retry_if_exception(lambda error: not is_credit_exhaustion(error)),
+    )
     async def _get_dummy_response_header(self, model_id: str):
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {openai.api_key}",
-            "OpenAI-Organization": self.organization,
-        }
-        data = {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "Say 1"}],
-        }
-        response = requests.post(url, headers=headers, json=data)
+        response = await self.client.chat.completions.with_raw_response.create(
+            model=model_id,
+            messages=[{"role": "user", "content": "Say 1"}],
+        )
         if "x-ratelimit-limit-tokens" not in response.headers:
             raise RuntimeError("Failed to get dummy response header")
         return response.headers
@@ -337,44 +294,81 @@ class OpenAIChatModel(OpenAIModel):
             + kwargs.get("n", 1) * kwargs.get("max_tokens", 15),
         )
 
-    def convert_top_logprobs(self, data):
-        # Initialize the new structure with only top_logprobs
-        top_logprobs = []
-
-        for item in data["content"]:
-            # Prepare a dictionary for top_logprobs
-            top_logprob_dict = {}
-            for top_logprob in item["top_logprobs"]:
-                top_logprob_dict[top_logprob["token"]] = top_logprob["logprob"]
-
-            top_logprobs.append(top_logprob_dict)
-
-        return top_logprobs
+    def convert_top_logprobs(self, data: ChoiceLogprobs):
+        return [
+            {entry.token: entry.logprob for entry in item.top_logprobs}
+            for item in (data.content or [])
+        ]
 
     async def _make_api_call(
         self, prompt: OAIChatPrompt, model_id, start_time, **params
     ) -> list[LLMResponse]:
         LOGGER.debug(f"Making {model_id} call with {self.organization}")
 
+        spec = resolve_model(model_id)
+        # SPECIAL TREATMENT: reasoning models reject sampling parameters, and
+        # Responses uses different output/token fields from Chat Completions.
+        params = {**spec.get("request_defaults", {}), **params}
+        max_tokens = params.pop("max_tokens", None) or spec["default_max_tokens"]
+        if not spec.get("sampling", False):
+            params.pop("temperature", None)
+            params.pop("top_p", None)
+        if "logprobs" in params and not spec.get("logprobs", False):
+            raise ValueError(
+                f"{model_id} does not support logprobs in its configured profile"
+            )
+        api_start = time.time()
+        if spec["endpoint"] == "responses":
+            n = params.pop("n", 1)
+            if n != 1:
+                raise ValueError("Responses requires one request per completion")
+            response = await self.client.responses.create(
+                model=model_id, input=prompt, max_output_tokens=max_tokens, **params
+            )
+            if response.status not in ("completed", "incomplete"):
+                raise RuntimeError(
+                    f"Responses request ended with status {response.status}: {response.error}"
+                )
+            reason = "completed"
+            if response.status == "incomplete":
+                reason = getattr(response.incomplete_details, "reason", None)
+                if reason not in ("max_output_tokens", "content_filter"):
+                    raise RuntimeError(f"Incomplete response: {reason}")
+                reason = "max_tokens" if reason == "max_output_tokens" else reason
+            return [
+                LLMResponse(
+                    model_id=model_id,
+                    completion=response.output_text,
+                    stop_reason=reason,
+                    duration=time.time() - start_time,
+                    api_duration=time.time() - api_start,
+                    cost=estimate_cost(
+                        model_id,
+                        response.usage.input_tokens,
+                        response.usage.output_tokens,
+                    ),
+                )
+            ]
         if "logprobs" in params:
             params["top_logprobs"] = params["logprobs"]
             params["logprobs"] = True
-
-        api_start = time.time()
-        api_response: OpenAICompletion = await openai.ChatCompletion.acreate(messages=prompt, model=model_id, organization=self.organization, **params)  # type: ignore
-        api_duration = time.time() - api_start
-        duration = time.time() - start_time
-        context_token_cost, completion_token_cost = price_per_token(model_id)
-        context_cost = api_response.usage.prompt_tokens * context_token_cost
+        api_response = await self.client.chat.completions.create(
+            messages=prompt, model=model_id, max_tokens=max_tokens, **params
+        )
+        # Split billed usage across choices; aggregate cost counts every token once.
+        cost = estimate_cost(
+            model_id,
+            api_response.usage.prompt_tokens,
+            api_response.usage.completion_tokens,
+        )
         return [
             LLMResponse(
                 model_id=model_id,
-                completion=choice.message.content,
+                completion=choice.message.content or "",
                 stop_reason=choice.finish_reason,
-                api_duration=api_duration,
-                duration=duration,
-                cost=context_cost
-                + count_tokens(choice.message.content) * completion_token_cost,
+                api_duration=time.time() - api_start,
+                duration=time.time() - start_time,
+                cost=None if cost is None else cost / len(api_response.choices),
                 logprobs=self.convert_top_logprobs(choice.logprobs)
                 if choice.logprobs is not None
                 else None,
@@ -397,16 +391,6 @@ class OpenAIChatModel(OpenAIModel):
         print()
 
 
-BASE_MODELS = {
-    "davinci-002",
-    "babbage-002",
-    "text-davinci-003",
-    "text-davinci-002",
-    "gpt-4-base",
-    "gpt-3.5-turbo-instruct",
-}
-
-
 class OpenAIBaseModel(OpenAIModel):
     def _process_prompt(
         self, prompt: Union[OAIBasePrompt, OAIChatPrompt]
@@ -416,18 +400,19 @@ class OpenAIBaseModel(OpenAIModel):
         return prompt
 
     def _assert_valid_id(self, model_id: str):
-        assert model_id in BASE_MODELS, f"Invalid model id: {model_id}"
+        spec = resolve_model(model_id)
+        if spec["provider"] != "openai" or spec["endpoint"] != "completions":
+            raise ValueError(f"Not an OpenAI completion model: {model_id}")
 
-    @retry(stop=stop_after_attempt(8), wait=wait_fixed(2))
+    @retry(
+        stop=stop_after_attempt(8),
+        wait=wait_fixed(2),
+        retry=retry_if_exception(lambda error: not is_credit_exhaustion(error)),
+    )
     async def _get_dummy_response_header(self, model_id: str):
-        url = "https://api.openai.com/v1/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {openai.api_key}",
-            "OpenAI-Organization": self.organization,
-        }
-        data = {"model": model_id, "prompt": "a", "max_tokens": 1}
-        response = requests.post(url, headers=headers, json=data)
+        response = await self.client.completions.with_raw_response.create(
+            model=model_id, prompt="a", max_tokens=1
+        )
         if "x-ratelimit-limit-tokens" not in response.headers:
             raise RuntimeError("Failed to get dummy response header")
         return response.headers
@@ -451,11 +436,16 @@ class OpenAIBaseModel(OpenAIModel):
     ) -> list[LLMResponse]:
         LOGGER.debug(f"Making {model_id} call with {self.organization}")
         api_start = time.time()
-        api_response: OpenAICompletion = await openai.Completion.acreate(prompt=prompt, model=model_id, organization=self.organization, **params)  # type: ignore
+        api_response: Completion = await self.client.completions.create(
+            prompt=prompt, model=model_id, **params
+        )
         api_duration = time.time() - api_start
         duration = time.time() - start_time
-        context_token_cost, completion_token_cost = price_per_token(model_id)
-        context_cost = api_response.usage.prompt_tokens * context_token_cost
+        cost = estimate_cost(
+            model_id,
+            api_response.usage.prompt_tokens,
+            api_response.usage.completion_tokens,
+        )
         return [
             LLMResponse(
                 model_id=model_id,
@@ -463,7 +453,7 @@ class OpenAIBaseModel(OpenAIModel):
                 stop_reason=choice.finish_reason,
                 api_duration=api_duration,
                 duration=duration,
-                cost=context_cost + count_tokens(choice.text) * completion_token_cost,
+                cost=None if cost is None else cost / len(api_response.choices),
                 logprobs=choice.logprobs.top_logprobs
                 if choice.logprobs is not None
                 else None,

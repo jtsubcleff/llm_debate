@@ -4,9 +4,8 @@ set -eoux pipefail
 exp_dir=./exp/minimal
 mkdir -p $exp_dir
 
-# using all gpt-4-turbo for this minimal example
-model=gpt-4-1106-preview
-model_judge=gpt-4-1106-preview
+# Model roles are configured centrally in core/config/models.yaml.
+model_judge=$(python3 -m core.llm_api.registry --role judge)
 
 # minimal example to reduce compute costs so using BoN=1 and only 10 questions
 # if you want to run the full experiment, use BoN=16, temperature=0.8 and limit=47 (see run_figure1.sh)
@@ -16,10 +15,10 @@ limit=20
 dataset_args="++max_num_from_same_story=5 ++split=both ++human_experiments=8 ++limit=$limit" # T_h dataset (47 questions)
 
 # Run all experiments
-debate_args="++correct_debater.language_model.model=$model \
-            ++incorrect_debater.language_model.model=$model \
-            ++correct_preference.language_model.model=$model \
-            ++incorrect_preference.language_model.model=$model \
+debate_args="++correct_debater.language_model.model=correct_debater \
+            ++incorrect_debater.language_model.model=incorrect_debater \
+            ++correct_preference.language_model.model=preference \
+            ++incorrect_preference.language_model.model=preference \
             ++correct_debater.BoN=$BoN ++incorrect_debater.BoN=$BoN \
             ++correct_debater.language_model.temperature=$temperature \
             ++incorrect_debater.language_model.temperature=$temperature \

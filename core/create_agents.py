@@ -184,11 +184,11 @@ def setup_debate(
         incorrect_judge_critique_pm,
     )
     if correct_debater:
-        LOGGER.info(cfg.correct_debater.language_model)
+        LOGGER.info(correct_debater.config.language_model)
     if incorrect_debater:
-        LOGGER.info(cfg.incorrect_debater.language_model)
+        LOGGER.info(incorrect_debater.config.language_model)
     if cross_examiner:
-        LOGGER.info(cfg.cross_examiner.language_model)
+        LOGGER.info(cross_examiner.config.language_model)
     return rollout
 
 

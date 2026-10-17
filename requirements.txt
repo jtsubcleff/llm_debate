@@ -1,13 +1,14 @@
 adjustText
 alembic
 altair
-anthropic>=0.3.1
+# Messages API for current Claude models; legacy completions retained for historical configs.
+anthropic>=0.49.0,<1.0.0
 datasets
 fastapi==0.100.0
 fire
 hydra-core
 matplotlib
-openai==0.28.0
+openai>=2.54.0,<3.0.0
 pandas
 polars
 pre-commit

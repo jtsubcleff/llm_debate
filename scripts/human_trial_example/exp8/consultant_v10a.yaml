@@ -2,14 +2,14 @@ debater_type: "quality"
 BoN: 16
 cBoN: 0
 bon_pm_config: "./experiments/human_judge/agent_configs/exp8/consultant_preference.yaml"
-preference_model: "gpt-4-1106-preview"
+preference_model: "preference"
 few_shot_num_samples: 0
 transcript_quotes: "normal"
 language_model:
-  model: "gpt-4-1106-preview"
+  model: "debater"
   temperature: 0.8
   top_p: 1.0
-  max_tokens: 1000
+  max_tokens: 8192
   max_words: 300
   min_words: 140
   num_candidates_per_completion: 2

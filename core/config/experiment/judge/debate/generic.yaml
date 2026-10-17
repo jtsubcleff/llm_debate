@@ -1,0 +1,7 @@
+judge_type: quality
+use_logprobs: false
+language_model:
+  model: judge
+  max_tokens: null
+prompts:
+  template: judge

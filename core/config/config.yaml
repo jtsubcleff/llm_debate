@@ -55,7 +55,7 @@ incorrect_critique_pm:
 rollout:
 
 # Judge
-judge_name: "gpt-4"
+judge_name: "${model:judge}"
 judge_type: "judge"
 round_limit: null
 

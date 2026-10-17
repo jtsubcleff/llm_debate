@@ -11,9 +11,9 @@ from typing import Dict, List, Optional, Set, Tuple
 import fire
 import pandas
 import requests
-import tiktoken
 from pydantic import BaseModel
 
+from core.llm_api.registry import tokenizer as model_tokenizer
 from core.utils import typer_async
 
 EXPERIMENT_ALIASES: Dict[str, List[str]] = {
@@ -230,7 +230,7 @@ def correct_answer_for_question(question: QuestionWithArticle):
 
 
 def get_token_length_for_question(question: QuestionWithArticle):
-    enc = tiktoken.encoding_for_model("gpt-4")
+    enc = model_tokenizer("debater")
     return len(enc.encode(question.article.article))
 
 

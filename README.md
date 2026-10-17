@@ -6,6 +6,23 @@ Code release for our paper [Debating with More Persuasive LLMs Leads to More Tru
 
 ## Setup
 
+### Model configuration
+
+Choose debate and judge models in [core/config/models.yaml](core/config/models.yaml).
+The defaults use stronger debaters with a smaller judge. Current OpenAI/Claude
+adapters, weak judge snapshots, generic prompt templates, and remaining model
+compatibility boundaries are documented in [the model configuration guide](docs/model_configuration.md).
+
+For a run using the generic prompts:
+
+```bash
+python -m core.debate exp_dir=./exp/my_run +experiment=debate_generic
+python -m core.judge exp_dir=./exp/my_run +experiment=debate_generic
+```
+
+The figure scripts now read the central catalog. Historical commands below show
+the paper's original model choices; their live availability is provider-dependent.
+
 ### Prerequisites
 
 - Python 3.11
@@ -43,7 +60,7 @@ Code release for our paper [Debating with More Persuasive LLMs Leads to More Tru
 
 ## Usage
 ### Minimal Script
-We recommend our minimal script to run everything end-to-end: `./scripts/reproduce_minimal.sh`. This will run all protocols (blind, consultancy, debate, interactive debate, expert judge) with GPT-4-Turbo expert and non-experts on 10 questions from QuALITY. Then run notebook `scripts/plot_minimal.ipynb` to generate a minimal plot similar to Figure 1 in the paper.
+We recommend our minimal script to run everything end-to-end: `./scripts/reproduce_minimal.sh`. This runs all protocols (blind, consultancy, debate, interactive debate, expert judge) with the centrally configured debater and judge roles on 10 questions from QuALITY. Then run notebook `scripts/plot_minimal.ipynb` to generate a minimal plot similar to Figure 1 in the paper.
 Running `./scripts/run_figure1.sh` will reproduce the LLM results in Figure 1 but uses best-of-16 so watch your OpenAI usage limit.
 
 ### Running Custom Experiments
@@ -170,7 +187,7 @@ Contributions to this repository are welcome. Please follow the standard procedu
 If you would like to cite our work or data, you may use this citation:
 ```
 @misc{khan2024debating,
-      title={Debating with More Persuasive LLMs Leads to More Truthful Answers}, 
+      title={Debating with More Persuasive LLMs Leads to More Truthful Answers},
       author={Akbir Khan and John Hughes and Dan Valentine and Laura Ruis and Kshitij Sachan and Ansh Radhakrishnan and Edward Grefenstette and Samuel R. Bowman and Tim Rocktäschel and Ethan Perez},
       year={2024},
       eprint={2402.06782},

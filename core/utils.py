@@ -9,12 +9,13 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
-import openai
 import pandas as pd
 import typer
 import yaml
 from tenacity import retry, retry_if_result, stop_after_attempt
 
+# Register Hydra's model resolver even for scoring-only entrypoints.
+from core.llm_api.registry import model_id  # noqa: F401
 from core.rollouts.utils import TranscriptConfig
 
 typer.main.get_command_name = lambda name: name
@@ -41,10 +42,12 @@ def setup_environment(
 ):
     setup_logging(logger_level)
     secrets = load_secrets("SECRETS")
-    openai.api_key = secrets[openai_tag]
-    os.environ["ANTHROPIC_API_KEY"] = secrets[anthropic_tag]
+    if secrets.get(openai_tag):
+        os.environ["OPENAI_API_KEY"] = secrets[openai_tag]
+    if secrets.get(anthropic_tag):
+        os.environ["ANTHROPIC_API_KEY"] = secrets[anthropic_tag]
     if organization is not None:
-        openai.organization = secrets[organization]
+        os.environ["OPENAI_ORG_ID"] = secrets[organization]
 
 
 def setup_logging(level_str):

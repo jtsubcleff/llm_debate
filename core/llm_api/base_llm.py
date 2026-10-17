@@ -4,14 +4,32 @@ from typing import Dict, List, Optional, Protocol
 
 import attrs
 import numpy as np
-from anthropic import AI_PROMPT, HUMAN_PROMPT
-from pydantic import BaseModel
+from pydantic import BaseModel, root_validator
+
+# Delimiters used by Anthropic's legacy completions prompt format.
+AI_PROMPT = "\n\nAssistant:"
+HUMAN_PROMPT = "\n\nHuman:"
 
 PRINT_COLORS = {"user": "cyan", "system": "magenta", "assistant": "light_green"}
 LOGGER = logging.getLogger(__name__)
 
 
 class PromptConfig(BaseModel):
+    template: Optional[str] = None
+
+    @root_validator(pre=True)
+    def template_defaults(cls, values):
+        if values.get("template"):
+            from core.prompts import load_template
+
+            defaults = load_template(values["template"])
+            return {
+                **defaults,
+                **values,
+                "vars": {**defaults.get("vars", {}), **values.get("vars", {})},
+            }
+        return values
+
     partials: Dict[str, str] = {}
     word_limit: Optional[int] = 100
     messages: List[Dict[str, str]] = []
@@ -22,6 +40,7 @@ class PromptConfig(BaseModel):
 
 class LanguageModelConfig(BaseModel):
     model: str
+
     temperature: float = 0.2
     top_p: float = 1.0
     max_tokens: Optional[int] = None
@@ -32,8 +51,10 @@ class LanguageModelConfig(BaseModel):
 
 
 class StopReason(Enum):
+    # SPECIAL TREATMENT: providers report different finish-reason vocabularies.
     MAX_TOKENS = auto()
     STOP_SEQUENCE = auto()
+    REFUSAL = auto()
 
     @classmethod
     def factory(cls, stop_reason: str) -> "StopReason":
@@ -42,8 +63,10 @@ class StopReason(Enum):
         """
         if stop_reason in ["max_tokens", "length"]:
             return cls.MAX_TOKENS
-        elif stop_reason in ["stop_sequence", "stop"]:
+        elif stop_reason in ["stop_sequence", "stop", "end_turn", "completed"]:
             return cls.STOP_SEQUENCE
+        elif stop_reason in ["refusal", "content_filter"]:
+            return cls.REFUSAL
         raise ValueError(f"Invalid stop reason: {stop_reason}")
 
     def __repr__(self):
@@ -55,7 +78,7 @@ class LLMResponse:
     model_id: str
     completion: str
     stop_reason: StopReason = attrs.field(converter=StopReason.factory)
-    cost: float
+    cost: Optional[float]
     duration: Optional[float] = None
     api_duration: Optional[float] = None
     logprobs: Optional[list[dict[str, float]]] = None

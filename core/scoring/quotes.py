@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from core.llm_api.registry import model_id
 from core.rollouts.utils import TranscriptConfig
 from core.scoring.accuracy import get_accuracy
 from web.backend.services.parser import TranscriptParser
@@ -26,10 +27,11 @@ ExperimentDirectory = tuple[str, Path, str]
 
 def main(
     exp_dirs: List[ExperimentDirectory] = None,
-    judge_name: str = "gpt-4",
+    judge_name: str = None,
     fig_dir: str = "figures",
     keep_sides_separate: bool = False,
 ):
+    judge_name = judge_name or model_id("judge")
     all_data = []
     os.makedirs(fig_dir, exist_ok=True)
 

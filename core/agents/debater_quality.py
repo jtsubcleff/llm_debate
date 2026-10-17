@@ -75,8 +75,8 @@ class DebaterQuality(DebaterBase):
             response = response.replace(quote_tag, "<quote>")
         for quote_tag in ["</v_quote>", "</u_quote>"]:
             response = response.replace(quote_tag, "</quote>")
-        # sometimes gpt-3.5 doesn't use the argument tag and just puts their argument after thinking
-        if self.config.language_model.model == "gpt-3.5-turbo-16k":
+        # SPECIAL TREATMENT: opt-in historical parsing quirks, configured in models.yaml.
+        if self.model_spec.get("argument_parser") == "untagged":
             if "<argument>" not in response and "</thinking>" in response:
                 response_ = response.split("</thinking>")[1].strip()
                 if response_:
@@ -89,7 +89,7 @@ class DebaterQuality(DebaterBase):
                 )
                 if response_:
                     response = f"<argument>{response_}</argument>"
-        if self.config.language_model.model == "claude-2.1":
+        if self.model_spec.get("argument_parser") == "legacy_claude":
             if "<argument>" not in response and "Argument:" in response:
                 response_ = response.split("Argument:")[1].strip()
                 response_ = (
@@ -168,7 +168,9 @@ class DebaterQuality(DebaterBase):
                 few_shot_messages_modified.append(message)
             return "\n\n".join(few_shot_messages_modified)
 
-    def fill_in_content(self, content: str, transcript: TranscriptConfig):
+    def fill_in_content(
+        self, content: str, transcript: TranscriptConfig, extra_vars=None
+    ):
         answer_defending, answer_opposing = self.answers_from_transcript(transcript)
         letter_defending, letter_opposing = self.answer_letters_from_transcript(
             transcript
@@ -177,6 +179,7 @@ class DebaterQuality(DebaterBase):
         placeholders = {
             "QUESTION": lambda: transcript.question,
             "STORY": lambda: transcript.story,
+            "CONTEXT": lambda: transcript.story,
             "NAME": lambda: name,
             "OPPONENT_NAME": lambda: opponent_name,
             "ANSWER_DEFENDING": lambda: answer_defending,
@@ -199,10 +202,25 @@ class DebaterQuality(DebaterBase):
             "WORD_LIMIT_REFINEMENT": lambda: str(self.config.prompts.word_limit),
         }
 
+        if self.config.prompts.template:
+            import re
+
+            from core.prompts import render
+
+            required = set(re.findall(r"<([A-Z][A-Z_0-9]*)>", content))
+            variables = dict(self.config.prompts.vars)
+            variables.update(
+                {key: value() for key, value in placeholders.items() if key in required}
+            )
+            variables.update(extra_vars or {})
+            return render(content, variables)
         for placeholder, placeholder_filler in placeholders.items():
             if f"<{placeholder}>" in content:
                 content = content.replace(f"<{placeholder}>", placeholder_filler())
-
+        for key, value in self.config.prompts.vars.items():
+            content = content.replace(f"<{key}>", value)
+        for key, value in (extra_vars or {}).items():
+            content = content.replace(f"<{key}>", value)
         return content
 
     def handle_quotes(self, argument: str):
@@ -257,13 +275,10 @@ class DebaterQuality(DebaterBase):
         prompt = self.construct_messages(transcript)
         # sometimes the transcript is too long for the fine-tuned model
         # in this case, we just return a default argument that the debate is over
-        if (
-            "ft:" in self.config.language_model.model
-            or "gpt-3.5-turbo" == self.config.language_model.model
-        ):
+        if self.model_spec.get("prompt_token_limit") is not None:
             content = "\n".join([x["content"] for x in prompt])
             num_tokens = len(self.tokenizer.encode(content))
-            if num_tokens > 3750:
+            if num_tokens > self.model_spec["prompt_token_limit"]:
                 arguments = [
                     f"<argument>{TOKEN_LIMIT_ARGUMENT}</argument>"
                 ] * self.config.BoN
@@ -297,7 +312,9 @@ class DebaterQuality(DebaterBase):
             messages.append(
                 {
                     "role": message["role"],
-                    "content": message["content"].replace("<CRITIQUE>", critique),
+                    "content": self.fill_in_content(
+                        message["content"], transcript, {"CRITIQUE": critique}
+                    ),
                 }
             )
         refinements = await self.api_handler(

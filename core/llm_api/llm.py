@@ -1,24 +1,16 @@
 import asyncio
 import logging
 import os
-from collections import defaultdict
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Literal, Optional, Union
 
 import attrs
 
-from core.llm_api.anthropic_llm import ANTHROPIC_MODELS, AnthropicChatModel
-from core.llm_api.base_llm import LLMResponse, ModelAPIProtocol
-from core.llm_api.openai_llm import (
-    BASE_MODELS,
-    GPT_CHAT_MODELS,
-    OAIBasePrompt,
-    OAIChatPrompt,
-    OpenAIBaseModel,
-    OpenAIChatModel,
-)
-from core.utils import load_secrets
+from core.llm_api.anthropic_llm import AnthropicChatModel
+from core.llm_api.base_llm import LLMResponse
+from core.llm_api.openai_llm import OpenAIBaseModel, OpenAIChatModel
+from core.llm_api.registry import resolve_model
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,33 +24,48 @@ class ModelAPI:
     organization: str = "DEFAULT_ORG"
     print_prompt_and_response: bool = False
 
-    _openai_base: OpenAIBaseModel = attrs.field(init=False)
-    _openai_chat: OpenAIChatModel = attrs.field(init=False)
-    _anthropic_chat: AnthropicChatModel = attrs.field(init=False)
-
+    _adapters: dict = attrs.field(init=False, factory=dict)
     running_cost: float = attrs.field(init=False, default=0)
-    model_timings: dict[str, list[float]] = attrs.field(init=False, default={})
-    model_wait_times: dict[str, list[float]] = attrs.field(init=False, default={})
+    unknown_cost_responses: int = attrs.field(init=False, default=0)
+    model_timings: dict[str, list[float]] = attrs.field(init=False, factory=dict)
+    model_wait_times: dict[str, list[float]] = attrs.field(init=False, factory=dict)
 
     def __attrs_post_init__(self):
-        secrets = load_secrets("SECRETS")
-        if self.organization is None:
-            self.organization = "DEFAULT_ORG"
-        self._openai_base = OpenAIBaseModel(
-            frac_rate_limit=self.openai_fraction_rate_limit,
-            organization=secrets[self.organization],
-            print_prompt_and_response=self.print_prompt_and_response,
-        )
-        self._openai_chat = OpenAIChatModel(
-            frac_rate_limit=self.openai_fraction_rate_limit,
-            organization=secrets[self.organization],
-            print_prompt_and_response=self.print_prompt_and_response,
-        )
-        self._anthropic_chat = AnthropicChatModel(
-            num_threads=self.anthropic_num_threads,
-            print_prompt_and_response=self.print_prompt_and_response,
-        )
         Path("./prompt_history").mkdir(exist_ok=True)
+
+    def _adapter(self, spec):
+        key = (spec["provider"], spec["endpoint"])
+        if key not in self._adapters:
+            if spec["provider"] == "anthropic":
+                adapter = AnthropicChatModel(
+                    num_threads=self.anthropic_num_threads,
+                    print_prompt_and_response=self.print_prompt_and_response,
+                )
+            else:
+                adapter_type = (
+                    OpenAIBaseModel
+                    if spec["endpoint"] == "completions"
+                    else OpenAIChatModel
+                )
+                organization = os.environ.get("OPENAI_ORG_ID")
+                secrets_path = Path("SECRETS")
+                if secrets_path.exists():
+                    from core.utils import load_secrets
+
+                    organization = load_secrets(secrets_path).get(
+                        self.organization or "DEFAULT_ORG", organization
+                    )
+                adapter = adapter_type(
+                    frac_rate_limit=self.openai_fraction_rate_limit,
+                    organization=organization or None,
+                    print_prompt_and_response=self.print_prompt_and_response,
+                )
+            self._adapters[key] = adapter
+        return self._adapters[key]
+
+    async def close(self):
+        for adapter in self._adapters.values():
+            await adapter.client.close()
 
     async def call_single(
         self,
@@ -135,38 +142,38 @@ class ModelAPI:
 
         if isinstance(model_ids, str):
             model_ids = [model_ids]
-            # # trick to double rate limit for most recent model only
-            # if model_ids.endswith("-0613"):
-            #     model_ids = [model_ids, model_ids.replace("-0613", "")]
-            #     print(f"doubling rate limit for most recent model {model_ids}")
-            # elif model_ids.endswith("-0914"):
-            #     model_ids = [model_ids, model_ids.replace("-0914", "")]
-            # else:
-            #     model_ids = [model_ids]
-
-        def model_id_to_class(model_id: str) -> ModelAPIProtocol:
-            if model_id in BASE_MODELS:
-                return self._openai_base
-            elif model_id in GPT_CHAT_MODELS or "ft:gpt-3.5-turbo" in model_id:
-                return self._openai_chat
-            elif model_id in ANTHROPIC_MODELS:
-                return self._anthropic_chat
-            raise ValueError(f"Invalid model id: {model_id}")
-
-        model_classes = [model_id_to_class(model_id) for model_id in model_ids]
-        if len(set(str(type(x)) for x in model_classes)) != 1:
-            raise ValueError("All model ids must be of the same type.")
-
-        model_class = model_classes[0]
-        if isinstance(model_class, AnthropicChatModel):
-            max_tokens = max_tokens if max_tokens is not None else 2000
-            kwargs["max_tokens_to_sample"] = max_tokens
-        else:
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
-
+        if not model_ids or n < 1 or num_candidates_per_completion < 1:
+            raise ValueError(
+                "At least one model and positive candidate counts are required."
+            )
+        specs = [resolve_model(name) for name in model_ids]
+        model_ids = [spec["id"] for spec in specs]
+        if len({(spec["provider"], spec["endpoint"]) for spec in specs}) != 1:
+            raise ValueError("All model ids must use the same provider and endpoint.")
+        if kwargs.get("logprobs") is not None and not all(
+            spec.get("logprobs", False) for spec in specs
+        ):
+            raise ValueError(
+                "Selected model profile does not support logprobs; set use_logprobs=false."
+            )
+        model_class = self._adapter(specs[0])
+        kwargs["max_tokens"] = (
+            max_tokens
+            if max_tokens is not None
+            else max(spec["default_max_tokens"] for spec in specs)
+        )
         num_candidates = num_candidates_per_completion * n
-        if isinstance(model_class, AnthropicChatModel):
+        if all(spec.get("multiple_completions", False) for spec in specs):
+            candidate_responses = await model_class(
+                model_ids,
+                prompt,
+                print_prompt_and_response,
+                max_attempts_per_api_call,
+                n=num_candidates,
+                **kwargs,
+            )
+        else:
+            # Responses and Messages APIs return one completion per request.
             candidate_responses = list(
                 chain.from_iterable(
                     await asyncio.gather(
@@ -183,16 +190,15 @@ class ModelAPI:
                     )
                 )
             )
-        else:
-            candidate_responses = await model_class(
-                model_ids,
-                prompt,
-                print_prompt_and_response,
-                max_attempts_per_api_call,
-                n=num_candidates,
-                **kwargs,
-            )
 
+        self.running_cost += sum(
+            response.cost
+            for response in candidate_responses
+            if response.cost is not None
+        )
+        self.unknown_cost_responses += sum(
+            response.cost is None for response in candidate_responses
+        )
         valid_responses = [
             response
             for response in candidate_responses
@@ -225,7 +231,6 @@ class ModelAPI:
         else:
             responses = valid_responses
 
-        self.running_cost += sum(response.cost for response in valid_responses)
         for response in responses:
             self.model_timings.setdefault(response.model_id, []).append(
                 response.api_duration
@@ -237,3 +242,4 @@ class ModelAPI:
 
     def reset_cost(self):
         self.running_cost = 0
+        self.unknown_cost_responses = 0

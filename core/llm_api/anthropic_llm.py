@@ -1,39 +1,28 @@
+"""SPECIAL TREATMENT: Claude Messages separates system prompts and text blocks.
+
+Legacy Completions is retained only for reproducing historical configurations.
+Model/version choices and compatibility flags live in config/models.yaml.
+"""
+
 import asyncio
 import json
 import logging
-import os
-import re
 import time
-from datetime import datetime
-from traceback import format_exc
-from typing import Optional, Union
+from pathlib import Path
+from uuid import uuid4
 
 import attrs
 from anthropic import AsyncAnthropic
-from anthropic.types.completion import Completion as AnthropicCompletion
-from termcolor import cprint
 
 from core.llm_api.base_llm import (
-    PRINT_COLORS,
     LLMResponse,
     ModelAPIProtocol,
     messages_to_single_prompt,
 )
-from core.llm_api.openai_llm import OAIChatPrompt
+from core.llm_api.errors import is_credit_exhaustion
+from core.llm_api.registry import estimate_cost, resolve_model
 
-ANTHROPIC_MODELS = {"claude-instant-1", "claude-2.0", "claude-v1.3", "claude-2.1"}
 LOGGER = logging.getLogger(__name__)
-
-
-def count_tokens(prompt: str) -> int:
-    return len(prompt.split())
-
-
-def price_per_token(model_id: str) -> tuple[float, float]:
-    """
-    Returns the (input token, output token) price for the given model id.
-    """
-    return 0, 0
 
 
 @attrs.define()
@@ -41,7 +30,7 @@ class AnthropicChatModel(ModelAPIProtocol):
     num_threads: int
     print_prompt_and_response: bool = False
     client: AsyncAnthropic = attrs.field(
-        init=False, default=attrs.Factory(AsyncAnthropic)
+        init=False, factory=lambda: AsyncAnthropic(max_retries=0)
     )
     available_requests: asyncio.BoundedSemaphore = attrs.field(init=False)
 
@@ -49,100 +38,109 @@ class AnthropicChatModel(ModelAPIProtocol):
         self.available_requests = asyncio.BoundedSemaphore(int(self.num_threads))
 
     @staticmethod
-    def _create_prompt_history_file(prompt):
-        filename = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}_prompt.txt"
-        with open(os.path.join("prompt_history", filename), "w") as f:
-            json_str = json.dumps(prompt, indent=4)
-            json_str = json_str.replace("\\n", "\n")
-            f.write(json_str)
-
-        return filename
-
-    @staticmethod
-    def _add_response_to_prompt_file(prompt_file, response):
-        with open(os.path.join("prompt_history", prompt_file), "a") as f:
-            f.write("\n\n======RESPONSE======\n\n")
-            json_str = json.dumps(response.to_dict(), indent=4)
-            json_str = json_str.replace("\\n", "\n")
-            f.write(json_str)
+    def messages_request(prompt, spec, params):
+        messages = (
+            [{"role": "user", "content": prompt}]
+            if isinstance(prompt, str)
+            else [dict(m) for m in prompt]
+        )
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        messages = [m for m in messages if m["role"] != "system"]
+        if not messages:
+            raise ValueError("Claude requires at least one non-system message")
+        if (
+            not spec.get("assistant_prefill", True)
+            and messages[-1]["role"] == "assistant"
+        ):
+            raise ValueError(
+                "This model does not support assistant prefill. Move the output-format instruction into the user prompt."
+            )
+        request = {**spec.get("request_defaults", {}), **params}
+        request["max_tokens"] = request.get("max_tokens") or spec["default_max_tokens"]
+        if not spec.get("sampling", False):
+            request.pop("temperature", None)
+            request.pop("top_p", None)
+        elif "temperature" in request and "top_p" in request:
+            # Claude versions may reject supplying both sampling controls.
+            request.pop("top_p")
+        if request.pop("logprobs", None) is not None:
+            raise ValueError("Claude does not expose token logprobs")
+        return dict(
+            model=spec["id"],
+            messages=messages,
+            **({"system": system} if system else {}),
+            **request,
+        )
 
     async def __call__(
-        self,
-        model_ids: list[str],
-        prompt: Union[str, OAIChatPrompt],
-        print_prompt_and_response: bool,
-        max_attempts: int,
-        **kwargs,
-    ) -> list[LLMResponse]:
+        self, model_ids, prompt, print_prompt_and_response, max_attempts, **kwargs
+    ):
+        if len(model_ids) != 1:
+            raise ValueError("Anthropic calls require one model")
+        spec = resolve_model(model_ids[0])
         start = time.time()
-        assert (
-            len(model_ids) == 1
-        ), "Anthropic implementation only supports one model at a time."
-        model_id = model_ids[0]
-        if isinstance(prompt, list):
-            prompt = messages_to_single_prompt(prompt)
-
-        prompt_file = self._create_prompt_history_file(prompt)
-        LOGGER.debug(f"Making {model_id} call")
-        response: Optional[AnthropicCompletion] = None
-        duration = None
-        for i in range(max_attempts):
+        if spec["endpoint"] == "messages":
+            request = self.messages_request(prompt, spec, kwargs)
+        else:
+            request = {**spec.get("request_defaults", {}), **kwargs}
+            request["max_tokens_to_sample"] = (
+                request.pop("max_tokens", None) or spec["default_max_tokens"]
+            )
+            request.update(
+                model=spec["id"],
+                prompt=messages_to_single_prompt(prompt)
+                if isinstance(prompt, list)
+                else prompt,
+            )
+        response = None
+        for attempt in range(max_attempts):
             try:
                 async with self.available_requests:
                     api_start = time.time()
-                    response = await self.client.completions.create(
-                        prompt=prompt, model=model_id, **kwargs
-                    )
+                    if spec["endpoint"] == "messages":
+                        response = await self.client.messages.create(**request)
+                    else:
+                        response = await self.client.completions.create(**request)
                     api_duration = time.time() - api_start
-            except Exception as e:
-                error_info = f"Exception Type: {type(e).__name__}, Error Details: {str(e)}, Traceback: {format_exc()}"
-                LOGGER.warn(
-                    f"Encountered API error: {error_info}.\nRetrying now. (Attempt {i})"
-                )
-                await asyncio.sleep(1.5**i)
-            else:
                 break
-
+            except Exception as error:
+                if is_credit_exhaustion(error):
+                    raise
+                if isinstance(error, (ValueError, TypeError)) or getattr(
+                    error, "status_code", None
+                ) in (400, 401, 403, 404, 422):
+                    raise
+                if attempt + 1 == max_attempts:
+                    raise RuntimeError(
+                        f"Anthropic request failed after {max_attempts} attempts"
+                    ) from error
+                LOGGER.warning("Anthropic request failed; retrying: %s", error)
+                await asyncio.sleep(1.5**attempt)
         if response is None:
-            raise RuntimeError(
-                f"Failed to get a response from the API after {max_attempts} attempts."
+            raise RuntimeError("No API attempts were made")
+        if spec["endpoint"] == "messages":
+            completion = "".join(
+                block.text for block in response.content if block.type == "text"
             )
-
-        num_context_tokens, num_completion_tokens = await asyncio.gather(
-            self.client.count_tokens(prompt),
-            self.client.count_tokens(response.completion),
-        )
-        context_token_cost, completion_token_cost = price_per_token(model_id)
-        cost = (
-            num_context_tokens * context_token_cost
-            + num_completion_tokens * completion_token_cost
-        )
-        duration = time.time() - start
-        LOGGER.debug(f"Completed call to {model_id} in {duration}s")
-
-        llm_response = LLMResponse(
-            model_id=model_id,
-            completion=response.completion,
+            cost = estimate_cost(
+                spec["id"], response.usage.input_tokens, response.usage.output_tokens
+            )
+        else:
+            completion = response.completion
+            cost = None  # Legacy API lacks authoritative token usage.
+        result = LLMResponse(
+            model_id=spec["id"],
+            completion=completion,
             stop_reason=response.stop_reason,
-            duration=duration,
-            api_duration=api_duration,
             cost=cost,
+            duration=time.time() - start,
+            api_duration=api_duration,
         )
-
-        self._add_response_to_prompt_file(prompt_file, llm_response)
+        history = Path("prompt_history")
+        history.mkdir(exist_ok=True)
+        (history / f"{uuid4()}_prompt.txt").write_text(
+            json.dumps({"request": request, "response": result.to_dict()}, indent=2)
+        )
         if self.print_prompt_and_response or print_prompt_and_response:
-            cprint(prompt, "yellow")
-            pattern = r"(Human: |Assistant: )(.*?)(?=(Human: |Assistant: )|$)"
-            for match in re.finditer(
-                pattern, prompt, re.S
-            ):  # re.S makes . match any character, including a newline
-                role = match.group(1).removesuffix(": ").lower()
-                role = {"human": "user"}.get(role, role)
-                cprint(match.group(2), PRINT_COLORS[role])
-            cprint(f"Response ({llm_response.model_id}):", "white")
-            cprint(
-                f"{llm_response.completion}", PRINT_COLORS["assistant"], attrs=["bold"]
-            )
-            print()
-
-        return [llm_response]
+            print(json.dumps(prompt, indent=2), completion)
+        return [result]

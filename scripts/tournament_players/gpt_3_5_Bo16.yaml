@@ -1,11 +1,11 @@
 debater_type: "quality"
 BoN: 16
 cBoN: 0
-preference_model: "gpt-4-1106-preview"
+preference_model: "preference"
 few_shot_num_samples: 0
 transcript_quotes: "normal"
 language_model:
-  model: "gpt-3.5-turbo-16k"
+  model: "legacy_gpt_3_5_turbo_16k"
   temperature: 0.8
   top_p: 1.0
   max_tokens: 1000

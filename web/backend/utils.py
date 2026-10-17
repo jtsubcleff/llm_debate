@@ -52,13 +52,16 @@ def get_judgement_type(path):
 
 
 def get_judge_model(path):
+    from core.llm_api.registry import resolve_model
+
     parts = path.split("/")
     # Go backwards through the parents so that the closest parent takes priority
     for part in reversed(parts):
-        if "gpt-4" in part or "gpt" in part:
-            return "GPT-4"
-        elif "claude" in part:
-            return "Claude"
+        try:
+            spec = resolve_model(part)
+        except ValueError:
+            continue
+        return spec.get("display_name", spec["id"])
 
     return "Unknown Model"
 

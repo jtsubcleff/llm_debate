@@ -5,13 +5,13 @@ DATE=$(date '+%y-%m-%d')
 exp_dir=./exp/figure3+5
 
 # figure 3 - run the cross play tournament and self play runs
-python3 -m paper_scripts.run_tournament --tournament_dir $exp_dir --method st --anthropic_num_threads 1 # swiss tournament
-python3 -m paper_scripts.run_tournament --tournament_dir $exp_dir --method sp --anthropic_num_threads 1 # self play
-python -m core.scoring.ratings --tournament-dir $exp_dir --judge-name gpt-4-1106-preview --dir-name st
+python3 -m scripts.run_tournament --tournament_dir $exp_dir --method st --anthropic_num_threads 1 # swiss tournament
+python3 -m scripts.run_tournament --tournament_dir $exp_dir --method sp --anthropic_num_threads 1 # self play
+python -m core.scoring.ratings --tournament-dir $exp_dir --judge-name $(python3 -m core.llm_api.registry --role judge) --dir-name st
 
 
 # figure 5 - judge the swiss tournament with other judges
-for model_judge in gpt-3.5-turbo claude-2.1; do
+for model_judge in $(python3 -m core.llm_api.registry --group judges); do
     judge_args="++judge.language_model.model=$model_judge ++limit=291 ++judge_name=$model_judge ++anthropic_num_threads=1"
     score_args="++judge_name=$model_judge"
     for dir in $exp_dir/st/*/; do

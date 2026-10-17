@@ -11,6 +11,7 @@ from tenacity import RetryError
 
 from core.debate import main as debate_main
 from core.judge import main as judge_main
+from core.llm_api.registry import resolve_model
 from core.scoring.accuracy import main as score_main
 from core.swiss_tournament import save_results, swiss_tournament
 
@@ -84,11 +85,14 @@ def run_match(
             cfg.incorrect_critic.language_model.model = conf2.language_model.model
             cfg.incorrect_critique_pm.language_model.model = conf2.preference_model
 
-        if "claude-v1.3" in [
+        # SPECIAL TREATMENT: configured per-model concurrency limits.
+        for name in (
             cfg.correct_preference.language_model.model,
             cfg.incorrect_preference.language_model.model,
-        ]:
-            num_threads = 30
+        ):
+            num_threads = min(
+                num_threads, resolve_model(name).get("max_concurrency", num_threads)
+            )
 
         debate_cfg_overrides = [
             f"exp_dir={match_dir}",
@@ -112,6 +116,7 @@ def run_match(
 
     print(f"Finished debater:\n{name1} vs {name2}")
 
+    primary_scores = None
     for judge_name, judge_model, judge_config in judges:
         print(f"Start judge:\n{name1} vs {name2}")
         with initialize(
@@ -155,7 +160,10 @@ def run_match(
             ]
             cfg = compose(config_name="config", overrides=score_cfg_overrides)
             wins_correct, wins_incorrect = score_main(cfg)
-        return wins_correct, wins_incorrect
+        if primary_scores is None:
+            primary_scores = (wins_correct, wins_incorrect)
+    # All configured judges score the transcript; Swiss pairing uses the first.
+    return primary_scores
 
 
 def main(

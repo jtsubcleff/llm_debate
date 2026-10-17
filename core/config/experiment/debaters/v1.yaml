@@ -4,15 +4,15 @@ cBoN: 0
 bon_pm_config: "./core/config/experiment/judge/debate/preference.yaml"
 critic_config: "./core/config/experiment/critic/debate/critic_story.yaml"
 critique_pm_config: "./core/config/experiment/critic/debate/critique_pm_story.yaml"
-preference_model: "gpt-4-1106-preview"
+preference_model: "preference"
 few_shot_num_samples: 0
 few_shot_base: null
 transcript_quotes: "normal"
 language_model:
-  model: "gpt-4-1106-preview"
+  model: "debater"
   temperature: 0.4
   top_p: 1.0
-  max_tokens: 1000
+  max_tokens: 8192
   max_words: 150
   min_words: 70
   num_candidates_per_completion: 3

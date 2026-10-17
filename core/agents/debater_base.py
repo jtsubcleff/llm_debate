@@ -1,12 +1,13 @@
 import logging
 from typing import Optional
 
-import tiktoken
-from pydantic import BaseModel
+from omegaconf import OmegaConf
+from pydantic import BaseModel, validator
 
 from core.file_handler import Method
 from core.llm_api.base_llm import LanguageModelConfig, PromptConfig
 from core.llm_api.llm import ModelAPI
+from core.llm_api.registry import resolve_model, tokenizer
 from core.rollouts.utils import Round, TranscriptConfig
 
 LOGGER = logging.getLogger(__name__)
@@ -29,6 +30,11 @@ class DebaterConfig(BaseModel):
     critic_config: Optional[str] = None
     critique_pm_config: Optional[str] = None
     preference_model: Optional[str] = None
+
+    @validator("preference_model")
+    def resolve_preference(cls, value):
+        return resolve_model(value)["id"] if value else value
+
     few_shot_num_samples: Optional[int] = 0
     transcript_quotes: Optional[str] = None
     permissions: Optional[dict] = None
@@ -44,6 +50,16 @@ class DebaterBase:
         correct: Optional[bool],
         api_handler: ModelAPI,
     ):
+        if OmegaConf.is_config(config):
+            config = OmegaConf.to_container(config, resolve=True)
+        config = (
+            config if isinstance(config, DebaterConfig) else DebaterConfig(**config)
+        )
+        selection = config.language_model.model
+        if selection == "debater":
+            selection = "correct_debater" if correct else "incorrect_debater"
+        config = config.copy(deep=True)
+        config.language_model.model = resolve_model(selection)["id"]
         self.method = method
         self.config = config
         self.correct = correct
@@ -58,7 +74,8 @@ class DebaterBase:
         if self.config.BoN > 1:
             LOGGER.info(f"Using BoN: {self.config.BoN} {self.side}")
 
-        self.tokenizer = tiktoken.encoding_for_model("gpt-4")
+        self.model_spec = resolve_model(self.config.language_model.model)
+        self.tokenizer = tokenizer(self.config.language_model.model)
 
     def construct_messages(self, _: TranscriptConfig):
         raise NotImplementedError

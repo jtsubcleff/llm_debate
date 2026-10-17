@@ -6,21 +6,17 @@ mkdir -p $exp_dir
 
 limit=400 # limit number of questions to speed up if needed
 dataset_args="++max_num_from_same_story=5 ++split=train ++limit=$limit" # T_l dataset (400 questions)
-pm_args="++correct_preference.language_model.model=gpt-4-1106-preview \
-            ++incorrect_preference.language_model.model=gpt-4-1106-preview \
-            ++correct_critique_pm.language_model.model=gpt-4-1106-preview \
-            ++incorrect_critique_pm.language_model.model=gpt-4-1106-preview"
+pm_args="++correct_preference.language_model.model=preference \
+            ++incorrect_preference.language_model.model=preference \
+            ++correct_critique_pm.language_model.model=critique_judge \
+            ++incorrect_critique_pm.language_model.model=critique_judge"
 
-model_judge=gpt-4-1106-preview
+model_judge=$(python3 -m core.llm_api.registry --role judge)
 judge_args="++judge.language_model.model=$model_judge ++anthropic_num_threads=$anthropic_num_threads ++organization=$organization ++limit=$limit ++judge_name=$model_judge"
 score_args="++judge_name=$model_judge"
 
-for model in gpt-4-1106-preview claude-2.1 gpt-3.5-turbo-16k; do
-    cross_examiner=$model
-    if [ $model == "gpt-3.5-turbo-16k" ]; then
-        # can use smaller context length for cross examiner (aka interactive judge)
-        cross_examiner="gpt-3.5-turbo"
-    fi
+for model in $(python3 -m core.llm_api.registry --group debaters); do
+    cross_examiner=$(python3 -m core.llm_api.registry --role cross_examiner)
 
     # 1) Just best-of-N
     for BoN in 2 4 8 16; do

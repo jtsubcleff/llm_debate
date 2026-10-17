@@ -1,0 +1,13 @@
+debater_type: quality
+BoN: 1
+cBoN: 0
+preference_model: preference
+transcript_quotes: normal
+language_model:
+  model: debater
+  max_tokens: null
+  min_words: 0
+  max_words: 250
+  num_candidates_per_completion: 1
+prompts:
+  template: debater

@@ -16,13 +16,11 @@ LOGGER = logging.getLogger(__name__)
 class JudgeQuality(JudgeBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.config.use_logprobs:
-            assert self.config.language_model.model in [
-                "gpt-4-1106-preview",
-                "gpt-4-base",
-                "gpt-3.5-turbo-instruct",
-            ], "Only davinci and gpt-4-base support logprobs"
-            LOGGER.info(f"Using logprobs: {self.config.use_logprobs}")
+        # SPECIAL TREATMENT: logprobs are a capability, not a model-name allowlist.
+        if self.config.use_logprobs and not self.model_spec.get("logprobs", False):
+            raise ValueError(
+                "Selected judge does not support logprobs. Set use_logprobs=false for discrete-choice scoring."
+            )
 
     def swap_transcript(self, transcript: TranscriptConfig) -> TranscriptConfig:
         swapped_transcript = copy.deepcopy(transcript).dict()
@@ -92,6 +90,7 @@ class JudgeQuality(JudgeBase):
             "NAME_B": lambda: "Debater B",
             "TRANSCRIPT": lambda: self.get_transcript(transcript),
             "STORY": lambda: transcript.story,
+            "CONTEXT": lambda: transcript.story,
             "CONSULTANT_ANSWER": lambda: transcript.answers.correct
             if transcript.names.correct
             else transcript.answers.incorrect,
@@ -111,10 +110,22 @@ class JudgeQuality(JudgeBase):
             "FEW_SHOT_MESSAGE": lambda: "",  # TODO support few shot for intermediary judge
             "WORD_LIMIT": lambda: str(self.config.prompts.word_limit),
         }
+        if self.config.prompts.template:
+            import re
+
+            from core.prompts import render
+
+            required = set(re.findall(r"<([A-Z][A-Z_0-9]*)>", content))
+            variables = dict(self.config.prompts.vars)
+            variables.update(
+                {key: value() for key, value in placeholders.items() if key in required}
+            )
+            return render(content, variables)
         for placeholder, placeholder_filler in placeholders.items():
             if f"<{placeholder}>" in content:
                 content = content.replace(f"<{placeholder}>", placeholder_filler())
-
+        for key, value in self.config.prompts.vars.items():
+            content = content.replace(f"<{key}>", value)
         return content
 
     def construct_messages(self, transcript: TranscriptConfig):
@@ -199,7 +210,7 @@ class JudgeQuality(JudgeBase):
                     temperature=self.config.language_model.temperature,
                     top_p=self.config.language_model.top_p,
                     max_tokens=self.config.language_model.max_tokens,
-                    logprobs=5,
+                    **({"logprobs": 5} if self.config.use_logprobs else {}),
                 )
                 assert len(responses) == 1, "Expected a single response."
                 _, logit1, logit2 = convert_to_prob(
@@ -255,7 +266,7 @@ class JudgeQuality(JudgeBase):
             temperature=self.config.language_model.temperature,
             top_p=self.config.language_model.top_p,
             max_tokens=self.config.language_model.max_tokens,
-            logprobs=5,
+            **({"logprobs": 5} if self.config.use_logprobs else {}),
         )
         assert len(responses) == 1, "Expected a single response."
 
@@ -267,8 +278,19 @@ class JudgeQuality(JudgeBase):
         else:
             tokens = ["B", "A"] if side == "correct" else ["A", "B"]
         # rating corresponds to prob of first token
-        rating, _, _ = convert_to_prob(responses[0].logprobs[0], tokens)
-        return rating
+        return self.choice_rating(responses[0], tokens)
+
+    def choice_rating(self, response, tokens):
+        if self.config.use_logprobs:
+            if not response.logprobs:
+                raise ValueError("Judge returned no token logprobs")
+            rating, _, _ = convert_to_prob(response.logprobs[0], tokens)
+            return rating
+        # Explicit discrete-choice mode. This is a coarser signal, not a probability.
+        choice = response.completion.strip().rstrip(".")
+        if choice not in tokens:
+            raise ValueError(f"Expected one of {tokens}, got {choice!r}")
+        return 1.0 if choice == tokens[0] else 0.0
 
     def extract_critique(self, response):
         try:
@@ -367,13 +389,12 @@ class JudgeQuality(JudgeBase):
             temperature=self.config.language_model.temperature,
             top_p=self.config.language_model.top_p,
             max_tokens=self.config.language_model.max_tokens,
-            logprobs=5,
+            **({"logprobs": 5} if self.config.use_logprobs else {}),
         )
         assert len(responses) == 1, "Expected a single response."
 
         tokens = ["Y", "N"]
-        rating, _, _ = convert_to_prob(responses[0].logprobs[0], tokens)
-        return rating
+        return self.choice_rating(responses[0], tokens)
 
     async def get_question(self, transcript: TranscriptConfig):
         # used for interactive judging
@@ -381,10 +402,10 @@ class JudgeQuality(JudgeBase):
 
         # sometimes for fine-tuned models the transcript is too long for the prompt
         # in this case just return a general question to round off the debate
-        if "ft:" in self.config.language_model.model:
+        if self.model_spec.get("prompt_token_limit") is not None:
             content = "\n".join([x["content"] for x in messages])
             num_tokens = len(self.tokenizer.encode(content))
-            if num_tokens > 3800:
+            if num_tokens > self.model_spec["prompt_token_limit"]:
                 question = (
                     "Can you please write your closing arguments so I can decide?"
                 )
@@ -418,7 +439,8 @@ class JudgeQuality(JudgeBase):
             response = await self.get_question(transcript)
             cache_manager.save_item(current_step, response_key, response)
 
-        if "gpt-3.5-turbo" in self.config.language_model.model:
+        # SPECIAL TREATMENT: explicit opt-in for historical untagged outputs.
+        if self.model_spec.get("question_parser") == "untagged":
             if "<question>" not in response and "</thinking>" in response:
                 response = response.split("</thinking>")[1].strip()
                 if response:

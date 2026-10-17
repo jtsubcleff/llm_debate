@@ -5,10 +5,10 @@ exp_dir=./exp/figure1
 
 limit=47 # limit number of questions to speed up if needed
 dataset_args="++max_num_from_same_story=5 ++split=both ++human_experiments=8 ++limit=$limit" # T_h dataset (47 questions)
-debate_args="++correct_debater.language_model.model=gpt-4-1106-preview \
-            ++incorrect_debater.language_model.model=gpt-4-1106-preview \
-            ++correct_preference.language_model.model=gpt-4-1106-preview \
-            ++incorrect_preference.language_model.model=gpt-4-1106-preview \
+debate_args="++correct_debater.language_model.model=debater \
+            ++incorrect_debater.language_model.model=debater \
+            ++correct_preference.language_model.model=preference \
+            ++incorrect_preference.language_model.model=preference \
             ++correct_debater.BoN=16 ++incorrect_debater.BoN=16 \
             ++correct_debater.language_model.temperature=0.8 \
             ++incorrect_debater.language_model.temperature=0.8"
@@ -21,7 +21,7 @@ python3 -m core.debate exp_dir=$exp_dir +experiment='debate' $debate_args $datas
 python3 -m core.debate exp_dir=$exp_dir +experiment='blind' $dataset_args
 python3 -m core.debate exp_dir=$exp_dir +experiment='oracle' $dataset_args
 
-for model_judge in gpt-3.5-turbo gpt-4-1106-preview claude-2.1; do
+for model_judge in $(python3 -m core.llm_api.registry --group judges); do
 
     # Run debate and consultancy with interactive judge
     interactive_args="$debate_args ++cross_examiner.language_model.model=$model_judge"
@@ -48,10 +48,6 @@ for model_judge in gpt-3.5-turbo gpt-4-1106-preview claude-2.1; do
         $judge_args
 
     model_judge_expert=$model_judge
-    if [ $model_judge == "gpt-3.5-turbo" ]; then
-        # Expert judge needs longer context
-        model_judge_expert="gpt-3.5-turbo-16k"
-    fi
     judge_expert_args="++judge.language_model.model=$model_judge_expert ++judge_name=$model_judge"
     python3 -m core.judge exp_dir=$exp_dir +experiment='oracle' \
         $judge_expert_args

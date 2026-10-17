@@ -1,11 +1,12 @@
 from typing import Optional
 
-import tiktoken
+from omegaconf import OmegaConf
 from pydantic import BaseModel
 
 from core.file_handler import Method
 from core.llm_api.base_llm import LanguageModelConfig, PromptConfig
 from core.llm_api.llm import ModelAPI
+from core.llm_api.registry import resolve_model, tokenizer
 from core.rollouts.utils import RolloutConfig
 
 
@@ -27,6 +28,11 @@ class JudgeBase:
         rollout_config: RolloutConfig,
         api_handler: ModelAPI,
     ):
+        if OmegaConf.is_config(config):
+            config = OmegaConf.to_container(config, resolve=True)
+        config = config if isinstance(config, JudgeConfig) else JudgeConfig(**config)
+        config = config.copy(deep=True)
+        config.language_model.model = resolve_model(config.language_model.model)["id"]
         self.method = method
         self.api_handler = api_handler
         self.config = config
@@ -34,7 +40,8 @@ class JudgeBase:
         self.name = self.rollout_config.judge_name
         self.rollout_type = rollout_config.rollout_type
         self.messages = self.config.prompts.messages
-        self.tokenizer = tiktoken.encoding_for_model("gpt-4")
+        self.model_spec = resolve_model(self.config.language_model.model)
+        self.tokenizer = tokenizer(self.config.language_model.model)
 
     async def make_decision(
         self,

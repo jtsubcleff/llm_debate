@@ -1,0 +1,259 @@
+# Central model catalog. Roles may refer to catalog keys, API IDs, or other roles.
+# Prices are USD per million tokens; omitted prices mean unknown, never free.
+# Reviewed 2026-10-17. Legacy entries do not imply continued provider availability.
+roles:
+  debater: openai_balanced
+  correct_debater: debater
+  incorrect_debater: debater
+  judge: judge_4o_mini
+  preference: judge
+  critic: debater
+  critique_judge: judge
+  cross_examiner: judge
+  concession_judge: judge
+groups:
+  debaters:
+  - openai_small
+  - openai_balanced
+  - openai_strong
+  - anthropic_small
+  - anthropic_balanced
+  - anthropic_strong
+  judges:
+  - judge_4o_mini
+  - judge_41_mini
+  - judge_5_mini
+profiles:
+  openai_chat:
+    provider: openai
+    endpoint: chat
+    sampling: true
+    logprobs: true
+    multiple_completions: true
+    tokenizer: cl100k_base
+    default_max_tokens: 2048
+  openai_reasoning:
+    provider: openai
+    endpoint: responses
+    sampling: false
+    logprobs: false
+    multiple_completions: false
+    tokenizer: o200k_base
+    default_max_tokens: 8192
+    request_defaults:
+      reasoning:
+        effort: low
+  openai_base:
+    provider: openai
+    endpoint: completions
+    sampling: true
+    logprobs: true
+    multiple_completions: true
+    tokenizer: cl100k_base
+    default_max_tokens: 2048
+  anthropic_messages:
+    provider: anthropic
+    endpoint: messages
+    sampling: false
+    logprobs: false
+    multiple_completions: false
+    tokenizer: o200k_base
+    default_max_tokens: 8192
+    assistant_prefill: false
+  anthropic_legacy:
+    provider: anthropic
+    endpoint: completions
+    sampling: true
+    logprobs: false
+    multiple_completions: false
+    tokenizer: cl100k_base
+    default_max_tokens: 2048
+models:
+  openai_strong:
+    id: gpt-6-astra
+    profile: openai_reasoning
+    price_per_million:
+    - 10
+    - 50
+  openai_balanced:
+    id: gpt-6.1-sol
+    profile: openai_reasoning
+    price_per_million:
+    - 2
+    - 10
+  openai_small:
+    id: gpt-6-luna
+    profile: openai_reasoning
+    price_per_million:
+    - 0.1
+    - 0.5
+  judge_4o_mini:
+    id: gpt-4o-mini
+    profile: openai_chat
+    aliases:
+    - gpt-4o-mini-2024-07-18
+    price_per_million:
+    - 0.15
+    - 0.6
+  judge_41_mini:
+    id: gpt-4.1-mini
+    profile: openai_chat
+    aliases:
+    - gpt-4.1-mini-2025-04-14
+    price_per_million:
+    - 0.4
+    - 1.6
+  judge_5_mini:
+    id: gpt-5-mini
+    profile: openai_reasoning
+    aliases:
+    - gpt-5-mini-2025-08-07
+    price_per_million:
+    - 0.25
+    - 2
+  judge_5_nano:
+    id: gpt-5-nano
+    profile: openai_reasoning
+    aliases:
+    - gpt-5-nano-2025-08-07
+    price_per_million:
+    - 0.05
+    - 0.4
+  anthropic_strong:
+    id: claude-opus-5-5
+    profile: anthropic_messages
+    price_per_million:
+    - 4
+    - 20
+  anthropic_balanced:
+    id: claude-sonnet-5-5
+    profile: anthropic_messages
+    price_per_million:
+    - 2
+    - 10
+  anthropic_small:
+    id: claude-haiku-5-5
+    profile: anthropic_messages
+  legacy_gpt_4:
+    id: gpt-4
+    profile: openai_chat
+    price_per_million:
+    - 30
+    - 60
+  legacy_gpt_4_0314:
+    id: gpt-4-0314
+    profile: openai_chat
+    price_per_million:
+    - 30
+    - 60
+  legacy_gpt_4_0613:
+    id: gpt-4-0613
+    profile: openai_chat
+    price_per_million:
+    - 30
+    - 60
+  legacy_gpt_4_32k:
+    id: gpt-4-32k
+    profile: openai_chat
+    price_per_million:
+    - 60
+    - 120
+  legacy_gpt_4_32k_0314:
+    id: gpt-4-32k-0314
+    profile: openai_chat
+    price_per_million:
+    - 60
+    - 120
+  legacy_gpt_4_32k_0613:
+    id: gpt-4-32k-0613
+    profile: openai_chat
+    price_per_million:
+    - 60
+    - 120
+  legacy_gpt_4_1106_preview:
+    id: gpt-4-1106-preview
+    profile: openai_chat
+    price_per_million:
+    - 10
+    - 30
+  legacy_gpt_3_5_turbo:
+    id: gpt-3.5-turbo
+    profile: openai_chat
+    question_parser: untagged
+    prompt_token_limit: 3750
+    price_per_million:
+    - 1.5
+    - 2
+  legacy_gpt_3_5_turbo_0613:
+    id: gpt-3.5-turbo-0613
+    profile: openai_chat
+    question_parser: untagged
+    price_per_million:
+    - 1.5
+    - 2
+  legacy_gpt_3_5_turbo_16k:
+    id: gpt-3.5-turbo-16k
+    profile: openai_chat
+    argument_parser: untagged
+    question_parser: untagged
+    price_per_million:
+    - 3
+    - 4
+  legacy_gpt_3_5_turbo_16k_0613:
+    id: gpt-3.5-turbo-16k-0613
+    profile: openai_chat
+    question_parser: untagged
+    price_per_million:
+    - 3
+    - 4
+  legacy_gpt_3_5_turbo_1106:
+    id: gpt-3.5-turbo-1106
+    profile: openai_chat
+    question_parser: untagged
+    price_per_million:
+    - 1
+    - 2
+  legacy_davinci_002:
+    id: davinci-002
+    profile: openai_base
+    price_per_million:
+    - 2
+    - 2
+  legacy_babbage_002:
+    id: babbage-002
+    profile: openai_base
+    price_per_million:
+    - 0.4
+    - 0.4
+  legacy_text_davinci_003:
+    id: text-davinci-003
+    profile: openai_base
+    price_per_million:
+    - 20
+    - 20
+  legacy_text_davinci_002:
+    id: text-davinci-002
+    profile: openai_base
+    price_per_million:
+    - 20
+    - 20
+  legacy_gpt_4_base:
+    id: gpt-4-base
+    profile: openai_base
+  legacy_gpt_3_5_turbo_instruct:
+    id: gpt-3.5-turbo-instruct
+    profile: openai_base
+  legacy_claude_instant_1:
+    id: claude-instant-1
+    profile: anthropic_legacy
+  legacy_claude_2_0:
+    id: claude-2.0
+    profile: anthropic_legacy
+  legacy_claude_v1_3:
+    id: claude-v1.3
+    profile: anthropic_legacy
+    max_concurrency: 30
+  legacy_claude_2_1:
+    id: claude-2.1
+    profile: anthropic_legacy
+    argument_parser: legacy_claude
