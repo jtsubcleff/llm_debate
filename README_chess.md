@@ -15,7 +15,12 @@ The experimental dataset should already be present at `chess_data/lichess_puzzle
 ## Run Direct QA
 
 Direct QA asks a model for the best first move from a FEN. It can reason and
+<<<<<<< HEAD
 call `validate_move_sequence` to check candidate lines with python-chess. No
+=======
+call `validate_move_sequence` to check candidate lines with python-chess, or
+`display_board_unicode(fen)` to view any supplied position as a Unicode board. No
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 engine evaluation or solution is exposed to the model.
 
 From the repository root with the virtual environment activated:
@@ -43,6 +48,41 @@ is seeded random sampling without replacement; all models receive the same
 sample. Default buckets are Low `<1300`, Medium `1300–2300` inclusive, and
 High `>2300`.
 
+<<<<<<< HEAD
+=======
+Experiments start immediately after local configuration and data validation;
+there is no pre-run cost estimate or confirmation prompt. The end-of-run summary
+reports cost estimates from recorded token usage and saved per-puzzle costs.
+
+OpenRouter calls default to a 600-second timeout per attempt (OpenAI calls
+retain 120 seconds). Override it in a chess command with
+`openrouter_timeout=300`, for example. The timeout applies to both the local
+deadline and SDK request, and must be positive. Existing retry counts still
+apply, so repeated failures can take longer to finish. This setting can change
+when resuming the same `exp_dir` without invalidating caches.
+
+For OpenRouter models, optionally add `reasoning_effort` to the model entry in
+`core/config/models.yaml` (or the catalog selected by `LLM_MODELS_CONFIG`):
+
+```yaml
+  openrouter_gpt_oss_20b:
+    id: openai/gpt-oss-20b
+    profile: openrouter_chat
+    reasoning_effort: low
+    # Keep the entry's existing prices and other metadata.
+```
+
+GPT-OSS supports `low`, `medium`, and `high`. The gateway also accepts `none`,
+`minimal`, `xhigh`, and `max` for models that support those levels; model/provider
+support varies. Omitting the field or setting it to `null` sends no effort
+override. The adapter sends this as OpenRouter's `reasoning.effort`, preserving
+configured routing and usage reporting. This convenience field currently applies
+only to OpenRouter; other providers retain their existing `request_defaults`.
+Changing effort changes the pinned model profile: use a new `exp_dir` so the
+runner does not mix previous cached answers with a different reasoning setting.
+See [OpenRouter reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 The default input is `chess_data/lichess_puzzles.csv`; override `dataset_path`
 for another prepared CSV. Required columns are `PuzzleId,FEN,Moves,Rating`.
 **FEN must already be the solver's position**, and `Moves` must start with the
@@ -50,6 +90,155 @@ solution in UCI. The repository's preparation script has already played and
 removed the opponent's setup move. Do not pass a raw Lichess database directly.
 The loader validates positions and solution sequences.
 
+<<<<<<< HEAD
+=======
+## Sequential debate and consultancy
+
+Run interactions separately from final judging:
+
+```bash
+# Each model plays both proposer and critic. Three turns each; critic ends.
+python -m core.chess.run protocol=debate num_rounds=3 \
+  models='[openai_small,anthropic_small]' limit=30 exp_dir=./exp/chess_debate
+
+# Explicit [proposer, questioner] pairs. Three proposer turns and two questions.
+python -m core.chess.run protocol=consultancy num_rounds=3 \
+  models='[[openai_small,anthropic_small],[openai_small,openai_small]]' \
+  limit=30 exp_dir=./exp/chess_consultancy
+
+# Make a final decision in a new run, using only the saved public transcript.
+python -m core.chess.judge transcripts_dir=./exp/chess_consultancy \
+  models='[anthropic_small]' exp_dir=./exp/chess_consultancy_judged
+
+# Preview/reapply proposal scoring without model requests.
+python -m core.chess.rescore ./exp/chess_debate --protocol debate
+python -m core.chess.rescore ./exp/chess_debate --protocol debate --write
+```
+
+`num_rounds` must be a positive integer. In debate, each round is a proposer
+argument followed by a critic argument, using the same model profile in separate
+agent turns. The opening proposer finds and defends its best move; the critic's
+task is to help a judge inspect that solution for errors in calculation,
+reasoning, or move selection. Later turns receive the complete public transcript
+and address the preceding argument. There is no cross-examiner. The critic has
+the last word, for `2 * num_rounds` total turns.
+
+In consultancy, the opening proposer solves the puzzle as in Direct QA. The
+questioning judge seeks truth by asking about the proposed move, then the
+proposer answers. The proposer has the last word: `num_rounds` proposer turns
+and `num_rounds - 1` questioner turns. `num_rounds=1` produces only the opening
+proposal. Questioner selection requires explicit pairs, including when both
+agents use the same model. Different pairs have separate caches and result rows;
+the proposer opening is generated independently for each pair. Questioning does
+not make a final Yes/No decision; final judging uses the existing separate command.
+
+The proposed move is locked when the opening proposer's tool-assisted turn
+finishes. `final_move` and `correct` always describe that opening answer; later
+changes of opinion cannot overwrite it. No agent receives the reference move or
+correctness label. Final judging measures the judge's decision about that locked
+move, separately from proposal accuracy.
+
+Both modes rely on native provider reasoning for private thinking. Visible
+responses are public arguments or questions shared with other participants and
+the final judge; the prompts do not ask models to generate thinking tags.
+Structured tool calls and tool results stay private to the model's own tool
+conversation. Agents should describe useful findings in their public arguments
+when another participant needs them. As a defensive fallback, the transcript
+filter still excludes any `<thinking>` content emitted by a model, including
+unclosed tags spanning tool responses.
+
+Each agent turn has its own `max_tool_rounds`, with `max_tokens` per API call.
+Both agents receive the existing chess tools unless `use_tools=false`.
+Successful calls are cached by puzzle and agent turn. A mid-interaction API/tool-loop failure saves a partial transcript,
+keeps the opening move, and leaves the puzzle incomplete; rerunning the same
+command replays cached calls and resumes. As in Direct QA, a non-tool final
+response that is truncated or refused counts as a completed turn. An opening
+truncation/refusal is scored incorrect. Completed interactions alone enter the
+aggregate accuracy denominator.
+
+Outputs live under `exp_dir/debate/<model>/puzzles.csv` or
+`exp_dir/consultancy/<proposer>__<questioner>/puzzles.csv`. They retain Direct QA's
+usage, cost, request ID, tool counts, error, move, and correctness fields, summed
+over all agent turns. `transcript` is structured public JSON; `model_response` is
+its readable, role-labelled text-only form. `tool_trace` retains the
+full audit history, including tagged private text/tools, with role/round/model
+annotations and the existing opaque-payload redaction. Functional caches retain
+full provider replay state. Private audit traces are excluded when these outputs
+are loaded for final judging. Consultancy summaries group by proposer/questioner
+pair; debate summaries group by proposer model. Changing rounds, prompts, tools,
+generation settings, or model profiles requires a new experiment directory.
+
+The protocol and public-transcript filter are in
+`core/chess/protocols/interaction.py`; experiment orchestration
+are in `core/chess/interaction.py`; role prompts are in
+`core/config/prompts/chess_interaction.yaml`. Opening-move scoring reuses Direct
+QA's SAN rules. The existing judge and rescoring commands consume saved outputs
+without rerunning the interaction.
+
+## Judge saved proposals or run proposer/judge pairs
+
+The chess judge makes a binary final judgement about a proposed first move.
+It receives puzzle instructions, the solver-position FEN, the proposed SAN move,
+and the proposer's response text (or the text-only public interaction). Tool
+calls, results, and audit traces are never included. It can challenge the argument
+and explore alternative lines with both chess tools. The reference solution and
+saved correctness label are never supplied to the judge. The prompt lives in
+`core/config/prompts/chess_judge.yaml`.
+
+```bash
+# Judge completed transcripts from an existing Direct QA experiment
+python -m core.chess.judge transcripts_dir=./exp/chess_direct_qa \
+  exp_dir=./exp/chess_judged models='[judge]'
+
+# Equivalent entry through the chess experiment runner
+python -m core.chess.run protocol=judge \
+  transcripts_dir=./exp/chess_direct_qa exp_dir=./exp/chess_judged models='[judge]'
+
+# End to end: each entry is [proposer, judge]
+python -m core.chess.run protocol=proposer_judge exp_dir=./exp/chess_pairs \
+  models='[[openai_small,anthropic_small],[anthropic_small,openai_small]]' \
+  limit=30 seed=42
+```
+
+`transcripts_dir` accepts an experiment root, its `direct_qa` directory, or one
+model's directory containing `puzzles.csv`. All completed rows in that directory
+are judged; `limit` and `dataset_path` do not select or resample saved transcripts.
+Incomplete proposer rows are skipped, and an empty selection fails before requests.
+Judge any number of models by passing a flat `models` list in standalone mode.
+
+The judge is prompted to finish with `Yes` or `No`. Scoring tolerates surrounding
+punctuation and Markdown, including `No.`, `**Yes**`, and `No**`, and stores the
+normalized verdict. A verdict followed by further prose is still invalid. A judge is correct
+when `Yes` matches a true proposer `correct` label, or `No` matches a false label.
+These labels use the existing Direct QA scoring contract, including alternative
+mates in one. If scoring rules changed, rescore the source experiment first.
+Malformed, truncated, or refused judge answers count as incorrect completed
+judgements. API/tool-loop failures remain incomplete for retry.
+
+Standalone judgements are saved under
+`exp_dir/judge/<judge-and-source-id>/puzzles.csv`, including `proposer`,
+`proposed_solution`, `proposer_correct`, `judgement`, judge `model_response`,
+`correct`, tool traces, usage, and costs. `exp_dir/results.csv` groups all judged
+sources by judge model; `accuracy` is the percentage of correct decisions (0–100).
+The existing `Low`, `Medium`, `High`, and `all` columns remain fractions (0–1).
+Only completed judgements enter these denominators.
+
+Paired runs solve each distinct proposer once on the shared balanced sample and
+judge only the requested pairs. Proposer results stay in the usual locations;
+judge outputs and summaries live under `exp_dir/judgements/`. Both stages use
+`max_tokens`, `max_tool_rounds`, and `temperature`. `use_tools=false` disables
+proposer tools only; the judge always receives both chess tools. Each stage
+starts automatically after validation, with proposals checkpointed before judging.
+
+Both stages checkpoint and resume with the same command. Judge manifests pin
+the exact input transcripts, prompt, tools, and generation settings; model
+profiles are pinned separately. Changing source responses or labels requires a
+new judge output directory. Source CSVs are read without modification.
+The text-only sharing policy is pinned in new judge and interaction manifests;
+use a new `exp_dir` for runs created before this policy. Older interaction
+transcripts are re-rendered without their tool events when loaded for judging.
+
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 ## Tools and scoring
 
 Example tool arguments: `{"moves": ["Nf3", "d5"]}` or
@@ -59,9 +248,26 @@ puzzles. Null moves are illegal. Results have `legal` (boolean), `fen` (new FEN
 if fully legal, otherwise null), and `first_illegal_move` (null if legal).
 Malformed arguments return an error to the model so it can correct them.
 
+<<<<<<< HEAD
 The model's final whitespace-separated token must exactly match canonical SAN
 for the first solution move, including check/mate/promotion notation. Markdown,
 extra punctuation, or a UCI final answer is incorrect. Truncated and refused
+=======
+`display_board_unicode` accepts `{"fen": "<position FEN>"}` and returns
+`{"board": "<Unicode board text>"}` using python-chess's default layout (White
+at the bottom). It accepts the original puzzle FEN or another position, such as
+a FEN returned by validation. It does not change the original puzzle position.
+Invalid FENs return a tool error.
+
+The model's final whitespace-separated token must exactly match canonical SAN
+for the first solution move, including check/mate/promotion notation. As an
+exception, a SAN move ending in `#` is also correct if python-chess confirms
+that it is legal from the original puzzle FEN and immediately delivers checkmate,
+even when it differs from the listed solution. This allows alternative mates in one.
+Matching Markdown wrappers around the final token (such as `**Bxf6**` or
+inline backticks) are removed before scoring, including nested wrappers.
+Extra punctuation or a UCI final answer is incorrect. Truncated and refused
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 responses count as incorrect. The prompt is in
 [core/config/prompts/chess_direct_qa.yaml](core/config/prompts/chess_direct_qa.yaml).
 
@@ -85,8 +291,36 @@ Each model has `exp_dir/direct_qa/<safe-model-name>_<hash>/puzzles.csv` with:
 
 - `puzzleId`, `rating`, `rating_bucket`, `FEN`, `moves`, and `model`;
 - `model_response`, `final_move`, `expected_move`, `correct`, `complete`, and `error`;
+<<<<<<< HEAD
 - `use_tools`, `input_tokens`, `output_tokens`, `cost` (USD; blank if unknown), `api_calls`,
   and `tool_trace` (JSON containing responses, tool calls, and results).
+=======
+- `request_id`: the last API turn's provider request ID, or the terminal API
+  error's request ID when available. Blank means the provider/old cache did not
+  supply one; connection failures and timeouts may have no ID. Each response in
+  `tool_trace`, turn caches, and prompt history also includes its own
+  `request_id`. Retried API errors log their IDs when available. IDs are provider
+  correlation IDs, not local prompt-history filenames. Old caches remain readable
+  but cannot recover IDs that were not originally saved;
+- `use_tools`, `input_tokens`, `output_tokens`, `cost` (USD; blank if unknown), `api_calls`,
+  and `tool_trace` (JSON containing responses, tool calls, and results);
+- `validate_move_sequence_calls`, `display_board_unicode_calls`, and
+  `validate_move_sequence_illegal_calls` for each puzzle solve.
+
+Tool counts include each dispatched call, including malformed arguments. The
+illegal-sequence count includes only validations returning `legal=false`; argument
+errors are not classified as illegal sequences. Counts are reconstructed from
+cached turns when resuming, so replay does not double-count. All counts are zero
+with `use_tools=false`.
+
+Opaque provider reasoning payloads (`signature`, `encrypted_content`, and
+encrypted/redacted reasoning data blocks) are replaced with a short marker in
+CSV tool traces and prompt-history logs. Readable response text, tool arguments,
+results, usage, and request IDs remain available. Full opaque payloads are kept
+only in functional turn caches and live requests, where providers may require
+them to continue tool conversations or resume an interrupted run. Existing files
+are not rewritten by this logging change.
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 
 Rows are checkpointed atomically after each completed or failed puzzle, and
 successful API turns are cached under the model's `cache/` directory. Run the
@@ -104,8 +338,41 @@ per-model `model.json` pins model profiles. Changed settings require a new
 `exp_dir`. Additional models can be added to the same experiment. Avoid running
 two processes writing the same experiment directory concurrently.
 
+<<<<<<< HEAD
 ## Visualize
 
+=======
+## Rescore saved results
+
+To apply updated scoring to saved responses without API calls, preview with:
+
+```bash
+python -m core.chess.rescore exp/chess_comparison
+python -m core.chess.rescore exp/chess_comparison --write
+
+# Apply judge scoring updates to saved judgements, with backups
+python -m core.chess.rescore exp/chess_judged_haiku --protocol judge --write
+```
+
+## Visualize
+
+For judge evaluations, open [scripts/plot_chess_judge.ipynb](scripts/plot_chess_judge.ipynb),
+set `EXP_DIR`, and run all cells. It accepts standalone judge or end-to-end
+experiment directories and creates a chart of false-positive, false-negative,
+true-positive, and true-negative rates per proposer/judge pairing. Positives
+mean accepting the proposal; rates use their standard ground-truth class
+denominators. The notebook shows class counts and excluded invalid/incomplete
+decisions, and saves `<EXP_DIR>/figures/judge_decision_rates.png`.
+The initial table and chart labels also show overall correctness as correct
+judgements divided by puzzles seen, counting invalid and failed attempts as
+incorrect and excluding untouched rows. A second chart uses the same accuracy
+definition for Low/Medium/High difficulty buckets, with correct/seen counts on
+each bar, and saves `<EXP_DIR>/figures/judge_accuracy_by_difficulty.png`.
+Its puzzle-ID widget also displays the board and the full proposer output followed
+by the judge output for every matching pairing, using the pinned proposer
+transcript when available.
+
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 Open [scripts/plot_chess.ipynb](scripts/plot_chess.ipynb), set `EXP_DIR`, and run
 all cells. It uses the same pandas/matplotlib/seaborn stack as `plot_minimal.ipynb`
 and saves PNGs to `<EXP_DIR>/figures/`:
@@ -114,9 +381,12 @@ and saves PNGs to `<EXP_DIR>/figures/`:
 2. Correctness by model and rating bucket.
 3. Success versus puzzle rating, with one ordinary least squares line per model.
 
+<<<<<<< HEAD
 The notebook also includes an **Inspect a single puzzle request** section. Set
 `MODEL` and `PUZZLE_ID` to view its board, rating, correct SAN move, full model
 output, and readable tool-call sequences and validation results.
+=======
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 
 Regression fits per-puzzle binary correctness; points show observed success in
 100-rating intervals. Linear predictions can fall outside 0–100%.
@@ -125,6 +395,15 @@ Regression fits per-puzzle binary correctness; points show observed success in
 
 `core/load/chess.py` owns puzzle loading and balanced sampling;
 `core/chess/tools.py` owns board validation; `core/chess/results.py` owns CSV
+<<<<<<< HEAD
 storage and summaries. Direct QA lives in `core/chess/protocols/direct_qa.py`.
 Register future implementations in `core/chess/run.py:PROTOCOLS` and add their
 prompt templates. The runner passes the selected protocol to result discovery.
+=======
+storage and summaries. Direct QA lives in `core/chess/protocols/direct_qa.py`; binary judging lives in
+`core/chess/protocols/judge.py`. Both reuse `run_chess_turns` for native tools,
+turn caches, traces, usage, and error handling. `core/chess/judge.py` loads saved
+transcripts and checkpoints judge evaluations; `core/chess/run.py` dispatches
+standalone protocols and orchestrates proposer/judge pairs. Register future
+solving protocols in `core/chess/run.py:PROTOCOLS` and add their prompt templates. The runner passes the selected protocol to result discovery.
+>>>>>>> ded8e85 (Add chess direct QA experiment)

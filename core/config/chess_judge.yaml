@@ -1,0 +1,8 @@
+defaults:
+  - chess
+  - _self_
+
+protocol: judge
+exp_dir: ./exp/chess_judge
+transcripts_dir: ./exp/chess_direct_qa
+models: [judge]

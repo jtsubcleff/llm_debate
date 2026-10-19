@@ -4,9 +4,17 @@ import hashlib
 import json
 from pathlib import Path
 
+import chess
+
 from core.chess.results import write_json
-from core.chess.tools import VALIDATE_MOVE_SEQUENCE, validate_move_sequence
+from core.chess.tools import (
+    CHESS_TOOLS,
+    TOOL_COUNT_FIELDS,
+    display_board_unicode,
+    validate_move_sequence,
+)
 from core.llm_api.base_llm import LLMResponse, StopReason
+from core.llm_api.errors import request_id_from_error
 from core.llm_api.tool_calls import assistant_message
 from core.prompts import load_template, render
 
@@ -17,7 +25,33 @@ def prompt_template_name(use_tools=True):
 
 def score_response(puzzle, response):
     answer = response.split()[-1] if response.split() else ""
-    return answer, answer == puzzle.expected_move
+    # Models sometimes format an otherwise valid final SAN move as **Bxf6**
+    # or `Bxf6`. Peel matching Markdown wrappers (including nested ones)
+    # before scoring, while preserving SAN check/mate suffixes and punctuation.
+    while answer:
+        for marker in ("***", "___", "**", "__", "~~", "`", "*", "_"):
+            if (
+                len(answer) > 2 * len(marker)
+                and answer.startswith(marker)
+                and answer.endswith(marker)
+            ):
+                answer = answer[len(marker) : -len(marker)]
+                break
+        else:
+            break
+    if answer == puzzle.expected_move:
+        return answer, True
+    if answer.endswith("#"):
+        board = chess.Board(puzzle.FEN)
+        try:
+            move = board.parse_san(answer)
+            # Keep the final-answer SAN contract; parse_san also accepts UCI.
+            if move in board.legal_moves and board.san(move) == answer:
+                board.push(move)
+                return answer, board.is_checkmate()
+        except ValueError:
+            pass
+    return answer, False
 
 
 async def run_direct_qa(
@@ -34,11 +68,45 @@ async def run_direct_qa(
         dict(role=m["role"], content=render(m["content"], {"FEN": puzzle.FEN}))
         for m in load_template(prompt_template_name(use_tools))["messages"]
     ]
+    result = await run_chess_turns(
+        api,
+        model,
+        puzzle,
+        cache_dir,
+        messages,
+        lambda text: score_response(puzzle, text),
+        "Tool budget exhausted. Return your final SAN move now.",
+        max_tokens,
+        max_tool_rounds,
+        temperature,
+        use_tools,
+    )
+    result["final_move"] = result.pop("final_answer")
+    result["expected_move"] = puzzle.expected_move
+    return result
+
+
+async def run_chess_turns(
+    api,
+    model,
+    puzzle,
+    cache_dir,
+    messages,
+    scorer,
+    final_instruction,
+    max_tokens=8192,
+    max_tool_rounds=10,
+    temperature=0.2,
+    use_tools=True,
+):
+    """Shared cached conversation and chess tool execution for final answers."""
     texts, trace = [], []
+    tool_counts = dict.fromkeys(TOOL_COUNT_FIELDS, 0)
     input_tokens = output_tokens = 0
     cost = 0.0
     unknown_cost = False
     complete, error, answer, correct = False, "", "", False
+    request_id = None
     tool_rounds = max_tool_rounds if use_tools else 0
     try:
         for turn in range(tool_rounds + 1):
@@ -57,20 +125,21 @@ async def run_direct_qa(
             else:
                 kwargs = dict(temperature=temperature)
                 if use_tools:
-                    kwargs["tools"] = [VALIDATE_MOVE_SEQUENCE]
+                    kwargs["tools"] = CHESS_TOOLS
                 if use_tools and turn == tool_rounds:
                     # Give a final answer turn after all permitted tool rounds.
                     messages.append(
                         dict(
                             role="user",
-                            content="Tool budget exhausted. Return your final SAN move now.",
+                            content=final_instruction,
                         )
                     )
                     kwargs["tool_choice"] = "none"
                 response = (
                     await api(model, messages, max_tokens=max_tokens, **kwargs)
                 )[0]
-                write_json(cache, response.to_dict())
+                write_json(cache, response.to_dict(include_opaque=True))
+            request_id = response.request_id
             input_tokens += response.input_tokens or 0
             output_tokens += response.output_tokens or 0
             unknown_cost |= response.cost is None
@@ -78,7 +147,7 @@ async def run_direct_qa(
             texts.append(response.completion)
             trace.append(response.to_dict())
             if not response.tool_calls:
-                answer, correct = score_response(puzzle, response.completion)
+                answer, correct = scorer(response.completion)
                 complete = True
                 # A truncated or refused answer is never a successful solution.
                 correct &= response.stop_reason == StopReason.STOP_SEQUENCE
@@ -94,10 +163,17 @@ async def run_direct_qa(
             messages.append(assistant_message(response))
             for call in response.tool_calls:
                 try:
-                    if call["function"]["name"] != "validate_move_sequence":
+                    name = call["function"]["name"]
+                    if name not in ("validate_move_sequence", "display_board_unicode"):
                         raise ValueError("Unknown tool")
+                    tool_counts[f"{name}_calls"] += 1
                     arguments = json.loads(call["function"]["arguments"])
-                    result = validate_move_sequence(puzzle.FEN, **arguments)
+                    if name == "validate_move_sequence":
+                        result = validate_move_sequence(puzzle.FEN, **arguments)
+                        if result["legal"] is False:
+                            tool_counts["validate_move_sequence_illegal_calls"] += 1
+                    else:
+                        result = dict(board=display_board_unicode(**arguments))
                 except (ValueError, TypeError) as exc:
                     result = dict(error=str(exc))
                 trace.append(dict(tool_call=call, result=result))
@@ -108,14 +184,17 @@ async def run_direct_qa(
                 )
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
+        request_id = request_id_from_error(exc)
+        trace.append(dict(error=error, request_id=request_id))
     return dict(
+        **tool_counts,
         use_tools=use_tools,
         model_response="\n\n".join(texts),
-        final_move=answer,
-        expected_move=puzzle.expected_move,
+        final_answer=answer,
         correct=bool(correct),
         complete=complete,
         error=error,
+        request_id=request_id,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost=None if unknown_cost else cost,

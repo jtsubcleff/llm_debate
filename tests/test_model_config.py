@@ -409,7 +409,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result[0].completion, "argument")
                 self.assertIs(result[0].stop_reason, StopReason.STOP_SEQUENCE)
                 if selection == "anthropic_small":
-                    self.assertIsNone(result[0].cost)
+                    self.assertAlmostEqual(result[0].cost, 3.5e-6)
 
     async def test_unsupported_features_fail_before_request(self):
         # Reject unsupported assistant prefill and logprobs before submitting a

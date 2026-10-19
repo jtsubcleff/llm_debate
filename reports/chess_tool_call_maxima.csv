@@ -1,0 +1,8 @@
+model,max_total_tool_calls,max_validation_calls,max_display_calls,max_tool_rounds,max_api_responses,max_total_puzzles
+claude-haiku-5-5,9,8,2,5,6,01Brx
+claude-sonnet-5-5,4,3,1,3,4,01JJc
+gpt-5-mini,11,9,5,10,11,00IpT
+gpt-6-luna,6,5,2,6,7,"00cy1,0139J,010wy"
+gpt-6.1-sol,6,6,1,3,4,00IpT
+openai/gpt-oss-120b,4,3,3,4,5,01EFz
+openai/gpt-oss-20b,1,1,1,1,2,"00baZ,01EFz,00L84,00Rlv,00Dib,04Szo,00IpT,00QZV,00TFd,04b9O"

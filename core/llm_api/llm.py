@@ -27,6 +27,9 @@ class ModelAPI:
     )
     organization: str = "DEFAULT_ORG"
     print_prompt_and_response: bool = False
+    openrouter_timeout: float = attrs.field(
+        default=600, validator=attrs.validators.gt(0)
+    )
 
     _adapters: dict = attrs.field(init=False, factory=dict)
     running_cost: float = attrs.field(init=False, default=0)
@@ -59,6 +62,10 @@ class ModelAPI:
                         "OpenRouter requires OPENROUTER_API_KEY in the environment or SECRETS."
                     )
                 adapter = OpenRouterChatModel(
+<<<<<<< HEAD
+=======
+                    request_timeout=self.openrouter_timeout,
+>>>>>>> ded8e85 (Add chess direct QA experiment)
                     frac_rate_limit=self.openai_fraction_rate_limit,
                     organization=None,
                     api_key=api_key,

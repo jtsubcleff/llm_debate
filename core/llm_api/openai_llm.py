@@ -23,7 +23,8 @@ from core.llm_api.base_llm import (
     ModelAPIProtocol,
     messages_to_single_prompt,
 )
-from core.llm_api.errors import is_credit_exhaustion
+from core.llm_api.errors import is_credit_exhaustion, request_id_from_error
+from core.llm_api.redaction import redact_opaque_data
 from core.llm_api.registry import estimate_cost
 from core.llm_api.registry import price_per_token as registry_price
 from core.llm_api.registry import resolve_model
@@ -95,6 +96,7 @@ class OpenAIModel(ModelAPIProtocol):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     print_prompt_and_response: bool = False
+    request_timeout: float = attrs.field(default=120, validator=attrs.validators.gt(0))
     model_ids: set[str] = attrs.field(init=False, default=attrs.Factory(set))
 
     client: AsyncOpenAI = attrs.field(
@@ -147,7 +149,7 @@ class OpenAIModel(ModelAPIProtocol):
     def _create_prompt_history_file(prompt):
         filename = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}_prompt.txt"
         with open(os.path.join("prompt_history", filename), "w") as f:
-            json_str = json.dumps(prompt, indent=4)
+            json_str = json.dumps(redact_opaque_data(prompt), indent=4)
             json_str = json_str.replace("\\n", "\n")
             f.write(json_str)
 
@@ -207,9 +209,12 @@ class OpenAIModel(ModelAPIProtocol):
                         continue  # Skip this iteration if the condition isn't met
 
                 # Make the API call outside the lock
+                timeout = kwargs.get("timeout", self.request_timeout)
                 return await asyncio.wait_for(
-                    self._make_api_call(prompt, model_id, start, **kwargs),
-                    timeout=kwargs.get("timeout", 120),
+                    self._make_api_call(
+                        prompt, model_id, start, **{**kwargs, "timeout": timeout}
+                    ),
+                    timeout=timeout,
                 )
 
         model_ids.sort(
@@ -227,17 +232,19 @@ class OpenAIModel(ModelAPIProtocol):
         ), "Prompt is too long for any model to handle."
         prompt_file = self._create_prompt_history_file(prompt)
         responses: Optional[list[LLMResponse]] = None
+        last_error = None
         for i in range(max_attempts):
             try:
                 responses = await attempt_api_call()
             except Exception as e:
+                last_error = e
                 if is_credit_exhaustion(e):
                     raise
                 if isinstance(e, (ValueError, TypeError)) or getattr(
                     e, "status_code", None
                 ) in (400, 401, 403, 404, 422):
                     raise
-                error_info = f"Exception Type: {type(e).__name__}, Error Details: {str(e)}, Traceback: {format_exc()}"
+                error_info = f"Exception Type: {type(e).__name__}, request_id={request_id_from_error(e)}, Error Details: {str(e)}, Traceback: {format_exc()}"
                 LOGGER.warn(
                     f"Encountered API error: {error_info}.\nRetrying now. (Attempt {i})"
                 )
@@ -248,7 +255,7 @@ class OpenAIModel(ModelAPIProtocol):
         if responses is None:
             raise RuntimeError(
                 f"Failed to get a response from the API after {max_attempts} attempts."
-            )
+            ) from last_error
 
         self._add_response_to_prompt_file(prompt_file, responses)
         if self.print_prompt_and_response or print_prompt_and_response:
@@ -355,6 +362,7 @@ class OpenAIChatModel(OpenAIModel):
             return [
                 LLMResponse(
                     model_id=model_id,
+                    request_id=getattr(response, "_request_id", None),
                     completion=response.output_text,
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
@@ -397,6 +405,7 @@ class OpenAIChatModel(OpenAIModel):
         return [
             LLMResponse(
                 model_id=model_id,
+                request_id=getattr(api_response, "_request_id", None),
                 completion=choice.message.content or "",
                 stop_reason=choice.finish_reason,
                 input_tokens=api_response.usage.prompt_tokens
@@ -431,9 +440,20 @@ class OpenAIChatModel(OpenAIModel):
         print()
 
 
+<<<<<<< HEAD
 class OpenRouterChatModel(OpenAIChatModel):
     """OpenRouter's OpenAI-compatible chat endpoint, using shared chat handling."""
 
+=======
+@attrs.define
+class OpenRouterChatModel(OpenAIChatModel):
+    """OpenRouter's OpenAI-compatible chat endpoint, using shared chat handling."""
+
+    # Routed generation can exceed two minutes; allow the SDK and outer deadline
+    # the same longer budget so neither cancels the response prematurely.
+    request_timeout: float = attrs.field(default=600, validator=attrs.validators.gt(0))
+
+>>>>>>> ded8e85 (Add chess direct QA experiment)
     def _assert_valid_id(self, model_id: str):
         spec = resolve_model(model_id)
         if spec["provider"] != "openrouter" or spec["endpoint"] != "chat":
@@ -441,7 +461,23 @@ class OpenRouterChatModel(OpenAIChatModel):
 
     async def _make_api_call(self, prompt, model_id, start_time, **params):
         # Request OpenRouter's actual billed cost alongside its token usage.
+<<<<<<< HEAD
         extra_body = dict(params.pop("extra_body", {}) or {})
+=======
+        spec = resolve_model(model_id)
+        defaults = dict(spec.get("request_defaults", {}).get("extra_body", {}) or {})
+        overrides = dict(params.pop("extra_body", {}) or {})
+        extra_body = {**defaults, **overrides}
+        # The SDK sends OpenRouter-only settings through extra_body. Merge
+        # reasoning separately so effort does not discard exclude/max_tokens,
+        # and keep configured provider routing when adding usage reporting.
+        reasoning = dict(defaults.get("reasoning", {}) or {})
+        if spec.get("reasoning_effort") is not None:
+            reasoning["effort"] = spec["reasoning_effort"]
+        reasoning.update(overrides.get("reasoning", {}) or {})
+        if reasoning:
+            extra_body["reasoning"] = reasoning
+>>>>>>> ded8e85 (Add chess direct QA experiment)
         extra_body.setdefault("usage", {"include": True})
         return await super()._make_api_call(
             prompt, model_id, start_time, extra_body=extra_body, **params
@@ -506,6 +542,7 @@ class OpenAIBaseModel(OpenAIModel):
         return [
             LLMResponse(
                 model_id=model_id,
+                request_id=getattr(api_response, "_request_id", None),
                 completion=choice.text,
                 stop_reason=choice.finish_reason,
                 api_duration=api_duration,

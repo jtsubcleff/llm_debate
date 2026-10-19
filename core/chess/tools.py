@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 """Puzzle-scoped move validation, with no engine or solution access."""
+=======
+"""Chess board utilities, with no engine or solution access."""
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 
 import chess
 
@@ -40,3 +44,40 @@ def validate_move_sequence(fen: str, moves: list[str]) -> dict:
         except ValueError:
             return dict(legal=False, fen=None, first_illegal_move=token)
     return dict(legal=True, fen=board.fen(), first_illegal_move=None)
+<<<<<<< HEAD
+=======
+
+
+DISPLAY_BOARD_UNICODE = {
+    "type": "function",
+    "function": {
+        "name": "display_board_unicode",
+        "description": "Convert a FEN into python-chess's Unicode board diagram (White at the bottom). Returns the diagram in the board field. Does not evaluate the position or change the puzzle state.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fen": {
+                    "type": "string",
+                    "description": "The FEN of the position to display.",
+                }
+            },
+            "required": ["fen"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+CHESS_TOOLS = [VALIDATE_MOVE_SEQUENCE, DISPLAY_BOARD_UNICODE]
+TOOL_COUNT_FIELDS = (
+    "validate_move_sequence_calls",
+    "display_board_unicode_calls",
+    "validate_move_sequence_illegal_calls",
+)
+
+
+def display_board_unicode(fen: str) -> str:
+    """Render the supplied FEN using python-chess's default Unicode layout."""
+    if not isinstance(fen, str):
+        raise ValueError("fen must be a FEN string")
+    return chess.Board(fen).unicode()
+>>>>>>> ded8e85 (Add chess direct QA experiment)

@@ -19,7 +19,8 @@ from core.llm_api.base_llm import (
     ModelAPIProtocol,
     messages_to_single_prompt,
 )
-from core.llm_api.errors import is_credit_exhaustion
+from core.llm_api.errors import is_credit_exhaustion, request_id_from_error
+from core.llm_api.redaction import redact_opaque_data
 from core.llm_api.registry import estimate_cost, resolve_model
 from core.llm_api.tool_calls import anthropic_messages
 
@@ -126,7 +127,11 @@ class AnthropicChatModel(ModelAPIProtocol):
                     raise RuntimeError(
                         f"Anthropic request failed after {max_attempts} attempts"
                     ) from error
-                LOGGER.warning("Anthropic request failed; retrying: %s", error)
+                LOGGER.warning(
+                    "Anthropic request failed (request_id=%s); retrying: %s",
+                    request_id_from_error(error),
+                    error,
+                )
                 await asyncio.sleep(1.5**attempt)
         if response is None:
             raise RuntimeError("No API attempts were made")
@@ -142,6 +147,7 @@ class AnthropicChatModel(ModelAPIProtocol):
             cost = None  # Legacy API lacks authoritative token usage.
         result = LLMResponse(
             model_id=spec["id"],
+            request_id=getattr(response, "_request_id", None),
             completion=completion,
             input_tokens=response.usage.input_tokens
             if spec["endpoint"] == "messages"
@@ -173,8 +179,11 @@ class AnthropicChatModel(ModelAPIProtocol):
         history = Path("prompt_history")
         history.mkdir(exist_ok=True)
         (history / f"{uuid4()}_prompt.txt").write_text(
-            json.dumps({"request": request, "response": result.to_dict()}, indent=2)
+            json.dumps(
+                {"request": redact_opaque_data(request), "response": result.to_dict()},
+                indent=2,
+            )
         )
         if self.print_prompt_and_response or print_prompt_and_response:
-            print(json.dumps(prompt, indent=2), completion)
+            print(json.dumps(redact_opaque_data(prompt), indent=2), completion)
         return [result]

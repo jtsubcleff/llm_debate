@@ -90,9 +90,18 @@ class LLMResponse:
     output_tokens: Optional[int] = None
     tool_calls: list[dict] = attrs.field(factory=list)
     response_items: Optional[list[dict]] = None
+<<<<<<< HEAD
 
     def to_dict(self):
         return {
+=======
+    request_id: Optional[str] = None
+
+    def to_dict(self, *, include_opaque=False):
+        from core.llm_api.redaction import redact_opaque_data
+
+        data = {
+>>>>>>> ded8e85 (Add chess direct QA experiment)
             "model_id": self.model_id,
             "completion": self.completion,
             "stop_reason": self.stop_reason.__repr__(),  # Convert to some JSON-serializable format.
@@ -104,7 +113,14 @@ class LLMResponse:
             "output_tokens": self.output_tokens,
             "tool_calls": self.tool_calls,
             "response_items": self.response_items,
+<<<<<<< HEAD
+=======
+            "request_id": self.request_id,
+>>>>>>> ded8e85 (Add chess direct QA experiment)
         }
+        # Encrypted reasoning is required for provider replay, but unreadable in
+        # results and logs. Only the functional turn cache opts into saving it.
+        return data if include_opaque else redact_opaque_data(data)
 
 
 class ModelAPIProtocol(Protocol):

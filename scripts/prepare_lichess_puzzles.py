@@ -4,6 +4,10 @@
 Keep the first N puzzles in each bucket: <1300, 1300 <= rating <2300, and
 2300+. N defaults to 1000. Stop reading once all buckets are full. If the
 input ends first, write the available puzzles and report any shortfall.
+Start at a random puzzle row, wrapping around to the beginning if needed.
+The first run caches the row count in a .rows.json sidecar; subsequent runs
+reuse it if the input is unchanged. Seeking streams up to the random start.
+Use --seed to repeat the same selection.
 
 No API calls or credentials are needed. Install dependencies with:
 
@@ -31,24 +35,27 @@ from tqdm import tqdm
 # date-splitting script. Importing these helpers performs no network requests.
 if __package__:
     from .filter_lichess_puzzles import (
-        INPUT_COLUMNS,
         OUTPUT_COLUMNS,
         normalized_position,
-        open_source_csv,
+        randomized_source_rows,
     )
 else:
     from filter_lichess_puzzles import (
-        INPUT_COLUMNS,
         OUTPUT_COLUMNS,
         normalized_position,
-        open_source_csv,
+        randomized_source_rows,
     )
 
 
 BUCKET_LABELS = ("<1300", "1300-2299", "2300+")
 
 
-def process(input_path: Path, output_path: Path, puzzles_per_bucket: int = 1000) -> int:
+def process(
+    input_path: Path,
+    output_path: Path,
+    puzzles_per_bucket: int = 1000,
+    seed: int | None = None,
+) -> int:
     """Select up to the quota per bucket, transform moves, and sort on disk."""
     if puzzles_per_bucket <= 0:
         raise ValueError("puzzles_per_bucket must be a positive integer")
@@ -76,18 +83,13 @@ def process(input_path: Path, output_path: Path, puzzles_per_bucket: int = 1000)
             )
             count = 0
             bucket_counts = [0, 0, 0]
-            with open_source_csv(input_path) as source, tqdm(
+            with randomized_source_rows(input_path, seed) as rows, tqdm(
                 total=3 * puzzles_per_bucket,
                 desc="Selecting puzzles",
                 unit="puzzle",
                 dynamic_ncols=True,
             ) as progress:
-                reader = csv.DictReader(source)
-                if reader.fieldnames != INPUT_COLUMNS:
-                    raise ValueError(
-                        f"Unexpected CSV columns. Expected {INPUT_COLUMNS!r}, got {reader.fieldnames!r}"
-                    )
-                for row_number, row in enumerate(reader, start=2):
+                for row_number, row in rows:
                     try:
                         rating = int(row["Rating"])
                         bucket = 0 if rating < 1300 else 1 if rating < 2300 else 2
@@ -170,10 +172,16 @@ def main() -> None:
         default=1000,
         help="Number to keep in each rating bucket (default: 1000)",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional random seed for reproducible selection",
+    )
     args = parser.parse_args()
     if args.puzzles_per_bucket <= 0:
         parser.error("--puzzles-per-bucket must be a positive integer")
-    count = process(args.input, args.output, args.puzzles_per_bucket)
+    count = process(args.input, args.output, args.puzzles_per_bucket, args.seed)
     print(f"Wrote {count:,} puzzles to {args.output}")
 
 

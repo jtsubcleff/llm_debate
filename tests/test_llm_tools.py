@@ -10,7 +10,7 @@ import httpx
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
-from core.chess.tools import VALIDATE_MOVE_SEQUENCE
+from core.chess.tools import CHESS_TOOLS, VALIDATE_MOVE_SEQUENCE
 from core.llm_api.anthropic_llm import AnthropicChatModel
 from core.llm_api.base_llm import StopReason
 from core.llm_api.openai_llm import OpenAIChatModel
@@ -32,6 +32,10 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
             )
             return httpx.Response(
                 200,
+                headers={
+                    "request-id": "req_anthropic_test",
+                    "x-request-id": "req_openai_test",
+                },
                 json=dict(
                     id="test",
                     object="chat.completion",
@@ -65,7 +69,7 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
             messages = [dict(role="user", content="Best move?")]
             first = (
                 await adapter._make_api_call(
-                    messages, "gpt-4", time.time(), tools=[VALIDATE_MOVE_SEQUENCE]
+                    messages, "gpt-4", time.time(), tools=CHESS_TOOLS
                 )
             )[0]
             self.assertEqual(first.stop_reason, StopReason.TOOL_CALL)
@@ -81,11 +85,19 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
                     messages,
                     "gpt-4",
                     time.time(),
-                    tools=[VALIDATE_MOVE_SEQUENCE],
+                    tools=CHESS_TOOLS,
                     tool_choice="none",
                 )
             )[0]
         self.assertEqual(final.completion, "e4")
+        self.assertEqual(first.request_id, "req_openai_test")
+        self.assertEqual(final.to_dict()["request_id"], "req_openai_test")
+        self.assertEqual(
+            requests[0]["tools"][1].get(
+                "name", requests[0]["tools"][1].get("function", {}).get("name")
+            ),
+            "display_board_unicode",
+        )
         self.assertEqual(requests[1]["messages"][1]["tool_calls"][0]["id"], "c1")
         self.assertEqual(requests[1]["messages"][2]["tool_call_id"], "c1")
 
@@ -117,6 +129,10 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
                 ]
             return httpx.Response(
                 200,
+                headers={
+                    "request-id": "req_anthropic_test",
+                    "x-request-id": "req_openai_test",
+                },
                 json=dict(
                     id="resp1",
                     object="response",
@@ -142,7 +158,7 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
                     messages,
                     "openai_small",
                     time.time(),
-                    tools=[VALIDATE_MOVE_SEQUENCE],
+                    tools=CHESS_TOOLS,
                 )
             )[0]
             self.assertEqual(first.tool_calls[0]["id"], "c1")
@@ -157,11 +173,19 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
                     messages,
                     "openai_small",
                     time.time(),
-                    tools=[VALIDATE_MOVE_SEQUENCE],
+                    tools=CHESS_TOOLS,
                     tool_choice="none",
                 )
             )[0]
         self.assertEqual(final.completion, "e4")
+        self.assertEqual(first.request_id, "req_openai_test")
+        self.assertEqual(final.to_dict()["request_id"], "req_openai_test")
+        self.assertEqual(
+            requests[0]["tools"][1].get(
+                "name", requests[0]["tools"][1].get("function", {}).get("name")
+            ),
+            "display_board_unicode",
+        )
         self.assertEqual(requests[0]["tools"][0]["name"], "validate_move_sequence")
         self.assertEqual(requests[1]["input"][1]["type"], "reasoning")
         self.assertEqual(requests[1]["input"][3]["call_id"], "c1")
@@ -173,6 +197,7 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
         def respond(request):
             requests.append(json.loads(request.content))
             blocks = [
+                dict(type="thinking", thinking="", signature="opaque_claude_signature"),
                 dict(type="text", text="Try e4"),
                 dict(
                     type="tool_use",
@@ -185,6 +210,10 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
                 blocks = [dict(type="text", text="e4")]
             return httpx.Response(
                 200,
+                headers={
+                    "request-id": "req_anthropic_test",
+                    "x-request-id": "req_openai_test",
+                },
                 json=dict(
                     id="msg1",
                     type="message",
@@ -209,14 +238,14 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
                 dict(role="system", content="Solve chess"),
                 dict(role="user", content="Best move?"),
             ]
-            with patch.object(Path, "write_text"):
+            with patch.object(Path, "write_text") as history:
                 first = (
                     await adapter(
                         ["anthropic_small"],
                         messages,
                         False,
                         1,
-                        tools=[VALIDATE_MOVE_SEQUENCE],
+                        tools=CHESS_TOOLS,
                     )
                 )[0]
                 messages.extend(
@@ -231,19 +260,33 @@ class NativeToolTests(unittest.IsolatedAsyncioTestCase):
                         messages,
                         False,
                         1,
-                        tools=[VALIDATE_MOVE_SEQUENCE],
+                        tools=CHESS_TOOLS,
                         tool_choice="none",
                     )
                 )[0]
         self.assertEqual(first.stop_reason, StopReason.TOOL_CALL)
         self.assertEqual((first.input_tokens, first.output_tokens), (20, 10))
         self.assertEqual(final.completion, "e4")
+        self.assertEqual(first.request_id, "req_anthropic_test")
+        self.assertEqual(final.to_dict()["request_id"], "req_anthropic_test")
+        self.assertEqual(
+            requests[0]["tools"][1].get(
+                "name", requests[0]["tools"][1].get("function", {}).get("name")
+            ),
+            "display_board_unicode",
+        )
         self.assertEqual(
             requests[0]["tools"][0]["input_schema"],
             VALIDATE_MOVE_SEQUENCE["function"]["parameters"],
         )
         self.assertEqual(requests[1]["messages"][-1]["content"][0]["tool_use_id"], "c1")
         self.assertEqual(requests[1]["tool_choice"], {"type": "none"})
+        self.assertEqual(
+            requests[1]["messages"][1]["content"][0]["signature"],
+            "opaque_claude_signature",
+        )
+        for saved in history.call_args_list:
+            self.assertNotIn("opaque_claude_signature", saved.args[0])
 
 
 if __name__ == "__main__":

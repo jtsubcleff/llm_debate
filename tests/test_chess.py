@@ -12,7 +12,7 @@ from hydra import compose, initialize_config_dir
 
 from core.chess.protocols.direct_qa import run_direct_qa, score_response
 from core.chess.run import run_experiment
-from core.chess.tools import validate_move_sequence
+from core.chess.tools import display_board_unicode, validate_move_sequence
 from core.llm_api.base_llm import LLMResponse
 from core.llm_api.tool_calls import (
     anthropic_messages,
@@ -68,13 +68,33 @@ class ChessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_move_sequence(original, [])
 
+    def test_unicode_board_matches_python_chess(self):
+        board = chess.Board()
+        self.assertEqual(display_board_unicode(board.fen()), board.unicode())
+        board.push_san("e4")
+        self.assertEqual(display_board_unicode(board.fen()), board.unicode())
+        self.assertNotEqual(display_board_unicode(board.fen()), chess.Board().unicode())
+        for invalid in ["bad fen", "", None, 42]:
+            with self.subTest(fen=invalid), self.assertRaises(ValueError):
+                display_board_unicode(invalid)
+
     def test_final_token_exact_san(self):
         p = puzzle()
         for text, correct in [
             ("Reasoning\ne4", True),
             ("e2e4", False),
             ("e4.", False),
-            ("`e4`", False),
+            ("`e4`", True),
+            ("**e4**", True),
+            ("*e4*", True),
+            ("__e4__", True),
+            ("_e4_", True),
+            ("***e4***", True),
+            ("~~e4~~", True),
+            ("**`e4`**", True),
+            ("**e4*", False),
+            ("**e4.**", False),
+            ("**e2e4**", False),
             ("e4 extra", False),
             ("", False),
         ]:
@@ -83,10 +103,41 @@ class ChessTests(unittest.TestCase):
         mate = puzzle(fen=board.fen(), moves="g6g7")
         self.assertEqual(mate.expected_move, "Qg7#")
         self.assertTrue(score_response(mate, "Qg7#")[1])
+        self.assertEqual(score_response(mate, "**Qg7#**"), ("Qg7#", True))
         promotion = puzzle(fen="7k/P7/8/8/8/8/8/7K w - - 0 1", moves="a7a8q")
         self.assertEqual(promotion.expected_move, "a8=Q+")
         castle = puzzle(fen="r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", moves="e1g1")
         self.assertEqual(castle.expected_move, "O-O")
+
+    def test_alternative_mates_in_one_are_correct(self):
+        p = puzzle(fen="7k/5K2/6Q1/8/8/8/8/8 w - - 0 1", moves="g6g7")
+        self.assertEqual(p.expected_move, "Qg7#")
+        self.assertEqual(score_response(p, "`Qg8#`"), ("Qg8#", True))
+        for answer in ["Qg7#", "Qg8#", "Qh6#", "Qh5#"]:
+            with self.subTest(answer=answer):
+                self.assertEqual(
+                    score_response(p, f"Reasoning\n{answer}"), (answer, True)
+                )
+        # The exception also applies when the listed move is not a mate.
+        other_solution = puzzle(fen=p.FEN, moves="g6g5")
+        self.assertTrue(score_response(other_solution, "Qg8#")[1])
+
+    def test_false_mate_claims_and_malformed_answers_are_incorrect(self):
+        p = puzzle(fen="7k/5K2/6Q1/8/8/8/8/8 w - - 0 1", moves="g6g7")
+        for answer in [
+            "Qg5#",
+            "Qh7#",
+            "Qa9#",
+            "e4#",
+            "g6g8#",
+            "Qg8#.",
+            "Qg8+",
+            "Qg8",
+            "Qg8##",
+        ]:
+            with self.subTest(answer=answer):
+                self.assertFalse(score_response(p, answer)[1])
+        self.assertFalse(score_response(puzzle(), "e4#")[1])
 
     def test_sampling_balanced_seeded_and_shortfalls(self):
         buckets = {
@@ -163,6 +214,64 @@ class ChessTests(unittest.TestCase):
 
 
 class ChessAsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_both_tools_counts_errors_and_cached_replay(self):
+        board = chess.Board()
+        board.push_san("e4")
+        requests = [
+            ("validate_move_sequence", '{"moves":["e4"]}'),
+            ("display_board_unicode", json.dumps(dict(fen=board.fen()))),
+            ("validate_move_sequence", '{"moves":["e4","e4"]}'),
+            ("validate_move_sequence", '{"moves":[]}'),
+            ("display_board_unicode", '{"fen":"bad fen"}'),
+            ("validate_move_sequence", "not json"),
+        ]
+        calls = [
+            dict(id=f"c{i}", type="function", function=dict(name=name, arguments=args))
+            for i, (name, args) in enumerate(requests)
+        ]
+        api = AsyncMock(
+            side_effect=[
+                [response("Checking the board", calls, "tool_calls")],
+                [response()],
+            ]
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            result = await run_direct_qa(api, "gpt-4", puzzle(), folder)
+            self.assertTrue(result["correct"])
+            self.assertEqual(result["validate_move_sequence_calls"], 4)
+            self.assertEqual(result["display_board_unicode_calls"], 2)
+            self.assertEqual(result["validate_move_sequence_illegal_calls"], 1)
+            offered = api.call_args_list[0].kwargs["tools"]
+            self.assertEqual(
+                {t["function"]["name"] for t in offered},
+                {"validate_move_sequence", "display_board_unicode"},
+            )
+            prompt = "\n".join(
+                m["content"]
+                for m in api.call_args_list[0].args[1]
+                if m["role"] != "tool"
+            )
+            self.assertIn("display_board_unicode", prompt)
+            outcomes = [
+                entry["result"]
+                for entry in json.loads(result["tool_trace"])
+                if "result" in entry
+            ]
+            self.assertEqual(outcomes[1]["board"], board.unicode())
+            self.assertEqual(sum("error" in outcome for outcome in outcomes), 3)
+            messages = api.call_args.args[1]
+            tool_messages = [m for m in messages if m["role"] == "tool"]
+            self.assertEqual(
+                json.loads(tool_messages[1]["content"])["board"], board.unicode()
+            )
+            again = await run_direct_qa(
+                AsyncMock(side_effect=AssertionError("Must use cache")),
+                "gpt-4",
+                puzzle(),
+                folder,
+            )
+            self.assertEqual(result, again)
+
     async def test_no_tools_prompt_single_call_and_cache(self):
         api = AsyncMock(return_value=[response()])
         with tempfile.TemporaryDirectory() as folder:
@@ -172,6 +281,9 @@ class ChessAsyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result["complete"])
             self.assertTrue(result["correct"])
             self.assertFalse(result["use_tools"])
+            self.assertEqual(result["validate_move_sequence_calls"], 0)
+            self.assertEqual(result["display_board_unicode_calls"], 0)
+            self.assertEqual(result["validate_move_sequence_illegal_calls"], 0)
             self.assertEqual(result["api_calls"], 1)
             self.assertEqual(result["input_tokens"], 10)
             self.assertEqual(result["output_tokens"], 5)
@@ -265,10 +377,14 @@ class ChessAsyncTests(unittest.IsolatedAsyncioTestCase):
             )
             result = await run_direct_qa(api, "gpt-4", puzzle(), folder)
             self.assertFalse(result["complete"])
+            self.assertEqual(result["validate_move_sequence_calls"], 1)
+            self.assertEqual(result["validate_move_sequence_illegal_calls"], 1)
             retry = AsyncMock(return_value=[response()])
             result = await run_direct_qa(retry, "gpt-4", puzzle(), folder)
             self.assertTrue(result["correct"])
             self.assertEqual(retry.await_count, 1)
+            self.assertEqual(result["validate_move_sequence_calls"], 1)
+            self.assertEqual(result["validate_move_sequence_illegal_calls"], 1)
             self.assertEqual(result["input_tokens"], 20)
             sent = retry.call_args.args[1]
             self.assertIn(
@@ -287,7 +403,88 @@ class ChessAsyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result["complete"])
             self.assertFalse(result["correct"])
 
-    async def test_multi_model_checkpoint_resume_and_manifest(self):
+    async def test_request_ids_in_cache_trace_and_terminal_errors(self):
+        from attrs import evolve
+
+        with tempfile.TemporaryDirectory() as folder:
+            result = await run_direct_qa(
+                AsyncMock(
+                    return_value=[
+                        evolve(response(), request_id="req_success", stop_reason="stop")
+                    ]
+                ),
+                "gpt-4",
+                puzzle(),
+                folder,
+            )
+            self.assertEqual(result["request_id"], "req_success")
+            self.assertEqual(
+                json.loads(result["tool_trace"])[0]["request_id"], "req_success"
+            )
+            again = await run_direct_qa(
+                AsyncMock(side_effect=AssertionError("Must use cache")),
+                "gpt-4",
+                puzzle(),
+                folder,
+            )
+            self.assertEqual(result, again)
+            cache = next(Path(folder).glob("*.json"))
+            old = json.loads(cache.read_text())
+            old.pop("request_id")
+            cache.write_text(json.dumps(old))
+            legacy = await run_direct_qa(
+                AsyncMock(side_effect=AssertionError("Must use cache")),
+                "gpt-4",
+                puzzle(),
+                folder,
+            )
+            self.assertIsNone(legacy["request_id"])
+            self.assertTrue(legacy["complete"])
+        with tempfile.TemporaryDirectory() as folder:
+            original = RuntimeError("provider error")
+            original.request_id = "req_error"
+            wrapped = RuntimeError("retries exhausted")
+            wrapped.__cause__ = original
+            result = await run_direct_qa(
+                AsyncMock(side_effect=wrapped),
+                "gpt-4",
+                puzzle(),
+                folder,
+            )
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["request_id"], "req_error")
+            self.assertEqual(
+                json.loads(result["tool_trace"])[-1]["request_id"], "req_error"
+            )
+
+    async def test_alternative_mate_scoring_in_both_tool_modes(self):
+        p = puzzle(fen="7k/5K2/6Q1/8/8/8/8/8 w - - 0 1", moves="g6g7")
+        for use_tools in [True, False]:
+            for stop_reason, correct in [
+                ("stop", True),
+                ("length", False),
+                ("refusal", False),
+            ]:
+                with self.subTest(
+                    use_tools=use_tools, stop_reason=stop_reason
+                ), tempfile.TemporaryDirectory() as folder:
+                    result = await run_direct_qa(
+                        AsyncMock(return_value=[response("Qg8#", reason=stop_reason)]),
+                        "gpt-4",
+                        p,
+                        folder,
+                        use_tools=use_tools,
+                    )
+                    self.assertTrue(result["complete"])
+                    self.assertEqual(result["correct"], correct)
+                    self.assertEqual(result["expected_move"], "Qg7#")
+                    self.assertEqual(result["final_move"], "Qg8#")
+
+    @patch(
+        "builtins.input",
+        side_effect=AssertionError("Runs must not prompt for a cost estimate"),
+    )
+    async def test_multi_model_checkpoint_resume_and_manifest(self, _confirm):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "puzzles.csv"
             with source.open("w", newline="") as f:
@@ -311,6 +508,13 @@ class ChessAsyncTests(unittest.IsolatedAsyncioTestCase):
             frames = await run_experiment(cfg, api)
             self.assertEqual(api.await_count, 6)
             self.assertEqual(len(frames), 2)
+            for frame in frames.values():
+                for field in (
+                    "validate_move_sequence_calls",
+                    "display_board_unicode_calls",
+                    "validate_move_sequence_illegal_calls",
+                ):
+                    self.assertEqual(frame[field].tolist(), [0, 0, 0])
             summary = pd.read_csv(Path(cfg.exp_dir) / "results.csv")
             self.assertTrue(
                 (summary[["Low", "Medium", "High", "all"]] == 1).all().all()

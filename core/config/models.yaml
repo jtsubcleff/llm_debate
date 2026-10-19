@@ -1,6 +1,13 @@
 # Central model catalog. Roles may refer to catalog keys, API IDs, or other roles.
 # Prices are USD per million tokens; omitted prices mean unknown, never free.
+# OpenRouter entries may optionally set reasoning_effort (e.g. low/medium/high).
+# Omit it to use provider defaults; accepted levels depend on the routed model.
 # Reviewed 2026-10-17. Legacy entries do not imply continued provider availability.
+# Training cutoffs researched 2026-10-19; informational only, with no runtime use.
+# Quoted ISO dates preserve source precision: YYYY-MM or YYYY-MM-DD.
+# Prefer published training-data cutoffs; otherwise use knowledge cutoffs as proxies.
+# These are not dates of final post-training completion or guarantees against data leakage.
+# ESTIMATE comments identify uncertain, conflicting, or family-inferred dates.
 roles:
   debater: openrouter_gpt_oss_120b
   correct_debater: debater
@@ -83,24 +90,36 @@ profiles:
 models:
   openai_strong:
     id: gpt-6-astra
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+    training_cutoff: "2026-04-30"
     profile: openai_reasoning
     price_per_million:
     - 10
     - 50
   openai_balanced:
     id: gpt-6.1-sol
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-6.1-sol
+    training_cutoff: "2026-04-30"
     profile: openai_reasoning
     price_per_million:
     - 2
     - 10
   openai_small:
     id: gpt-6-luna
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-6-luna
+    training_cutoff: "2026-05-18"
     profile: openai_reasoning
     price_per_million:
     - 0.1
     - 0.5
   judge_4o_mini:
     id: gpt-4o-mini
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-4o-mini
+    training_cutoff: "2023-10-01"
     profile: openai_chat
     aliases:
     - gpt-4o-mini-2024-07-18
@@ -109,6 +128,9 @@ models:
     - 0.6
   judge_41_mini:
     id: gpt-4.1-mini
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-4.1-mini
+    training_cutoff: "2024-06-01"
     profile: openai_chat
     aliases:
     - gpt-4.1-mini-2025-04-14
@@ -117,6 +139,9 @@ models:
     - 1.6
   judge_5_mini:
     id: gpt-5-mini
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-5-mini
+    training_cutoff: "2024-05-31"
     profile: openai_reasoning
     aliases:
     - gpt-5-mini-2025-08-07
@@ -125,6 +150,9 @@ models:
     - 2
   judge_5_nano:
     id: gpt-5-nano
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-5-nano
+    training_cutoff: "2024-05-31"
     profile: openai_reasoning
     aliases:
     - gpt-5-nano-2025-08-07
@@ -133,75 +161,131 @@ models:
     - 0.4
   anthropic_strong:
     id: claude-opus-5-5
+    # Published training-data cutoff; source specifies the month only.
+    # Source: https://platform.claude.com/docs/en/models/opus-5-5/overview
+    training_cutoff: "2026-06"
     profile: anthropic_messages
     price_per_million:
     - 4
     - 20
   anthropic_balanced:
     id: claude-sonnet-5-5
+    # Published training-data cutoff; source specifies the month only.
+    # Source: https://platform.claude.com/docs/en/models/sonnet-5-5/overview
+    training_cutoff: "2026-06"
     profile: anthropic_messages
     price_per_million:
     - 2
     - 10
   anthropic_small:
     id: claude-haiku-5-5
+    # Published training-data cutoff; source specifies the month only.
+    # Source: https://platform.claude.com/docs/en/models/haiku-5-5/overview
+    training_cutoff: "2026-06"
     profile: anthropic_messages
+<<<<<<< HEAD
   openrouter_gpt_oss_120b:
     id: openai/gpt-oss-120b
+=======
+    # Standard USD/MTok for prompts <=100K tokens, verified 2026-10-20.
+    # Prompts >100K cost $0.50 input / $2.50 output per MTok;
+    # the current fixed-rate estimator does not model this higher tier.
+    # Source: https://platform.claude.com/docs/en/models/haiku-5-5/overview#pricing
+    price_per_million:
+    - 0.1
+    - 0.5
+  openrouter_gpt_oss_120b:
+    id: openai/gpt-oss-120b
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-oss-120b
+    training_cutoff: "2024-06-01"
+>>>>>>> ded8e85 (Add chess direct QA experiment)
     profile: openrouter_chat
     price_per_million:
     - 0.03
     - 0.17
   openrouter_gpt_oss_20b:
     id: openai/gpt-oss-20b
+<<<<<<< HEAD
     profile: openrouter_chat
+=======
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-oss-20b
+    training_cutoff: "2024-06-01"
+    profile: openrouter_chat
+    #reasoning_effort: low  # Optional; changing this requires a new exp_dir.
+>>>>>>> ded8e85 (Add chess direct QA experiment)
     price_per_million:
     - 0.02
     - 0.1
   legacy_gpt_4:
     id: gpt-4
+    # Current alias documentation; do not apply this date to historical pinned snapshots.
+    # Source: https://developers.openai.com/api/docs/models/gpt-4
+    training_cutoff: "2023-12-01"
     profile: openai_chat
     price_per_million:
     - 30
     - 60
   legacy_gpt_4_0314:
     id: gpt-4-0314
+    # ESTIMATE: latest credible GPT-4 pretraining-family date (Table 3); exact snapshot cutoff unpublished.
+    # Source: https://proceedings.neurips.cc/paper_files/paper/2024/file/7537726385a4a6f94321e3adf8bd827e-Paper-Datasets_and_Benchmarks_Track.pdf
+    training_cutoff: "2022-01"
     profile: openai_chat
     price_per_million:
     - 30
     - 60
   legacy_gpt_4_0613:
     id: gpt-4-0613
+    # ESTIMATE: Table 3 reports Jan 2022; older provider reports say the majority of data ends Sep 2021.
+    # Source: https://proceedings.neurips.cc/paper_files/paper/2024/file/7537726385a4a6f94321e3adf8bd827e-Paper-Datasets_and_Benchmarks_Track.pdf
+    training_cutoff: "2022-01"
     profile: openai_chat
     price_per_million:
     - 30
     - 60
   legacy_gpt_4_32k:
     id: gpt-4-32k
+    # ESTIMATE: latest credible GPT-4 pretraining-family date (Table 3); exact snapshot cutoff unpublished.
+    # Source: https://proceedings.neurips.cc/paper_files/paper/2024/file/7537726385a4a6f94321e3adf8bd827e-Paper-Datasets_and_Benchmarks_Track.pdf
+    training_cutoff: "2022-01"
     profile: openai_chat
     price_per_million:
     - 60
     - 120
   legacy_gpt_4_32k_0314:
     id: gpt-4-32k-0314
+    # ESTIMATE: latest credible GPT-4 pretraining-family date (Table 3); exact snapshot cutoff unpublished.
+    # Source: https://proceedings.neurips.cc/paper_files/paper/2024/file/7537726385a4a6f94321e3adf8bd827e-Paper-Datasets_and_Benchmarks_Track.pdf
+    training_cutoff: "2022-01"
     profile: openai_chat
     price_per_million:
     - 60
     - 120
   legacy_gpt_4_32k_0613:
     id: gpt-4-32k-0613
+    # ESTIMATE: latest credible GPT-4 pretraining-family date (Table 3); exact snapshot cutoff unpublished.
+    # Source: https://proceedings.neurips.cc/paper_files/paper/2024/file/7537726385a4a6f94321e3adf8bd827e-Paper-Datasets_and_Benchmarks_Track.pdf
+    training_cutoff: "2022-01"
     profile: openai_chat
     price_per_million:
     - 60
     - 120
   legacy_gpt_4_1106_preview:
     id: gpt-4-1106-preview
+    # Published knowledge cutoff for this exact snapshot; source specifies the month only.
+    # Source: https://openai.com/index/new-models-and-developer-products-announced-at-devday/
+    training_cutoff: "2023-04"
     profile: openai_chat
     price_per_million:
     - 10
     - 30
   legacy_gpt_3_5_turbo:
     id: gpt-3.5-turbo
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-3.5-turbo
+    training_cutoff: "2021-09-01"
     profile: openai_chat
     question_parser: untagged
     prompt_token_limit: 3750
@@ -210,6 +294,9 @@ models:
     - 2
   legacy_gpt_3_5_turbo_0613:
     id: gpt-3.5-turbo-0613
+    # ESTIMATE: retired snapshot inherits the published GPT-3.5 Turbo family cutoff; day not established.
+    # Source: https://developers.openai.com/api/docs/models/gpt-3.5-turbo
+    training_cutoff: "2021-09"
     profile: openai_chat
     question_parser: untagged
     price_per_million:
@@ -217,6 +304,9 @@ models:
     - 2
   legacy_gpt_3_5_turbo_16k:
     id: gpt-3.5-turbo-16k
+    # ESTIMATE: retired snapshot inherits the published GPT-3.5 Turbo family cutoff; day not established.
+    # Source: https://developers.openai.com/api/docs/models/gpt-3.5-turbo
+    training_cutoff: "2021-09"
     profile: openai_chat
     argument_parser: untagged
     question_parser: untagged
@@ -225,6 +315,9 @@ models:
     - 4
   legacy_gpt_3_5_turbo_16k_0613:
     id: gpt-3.5-turbo-16k-0613
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-3.5-turbo-16k-0613
+    training_cutoff: "2021-09-01"
     profile: openai_chat
     question_parser: untagged
     price_per_million:
@@ -232,6 +325,9 @@ models:
     - 4
   legacy_gpt_3_5_turbo_1106:
     id: gpt-3.5-turbo-1106
+    # ESTIMATE: retired snapshot inherits the published GPT-3.5 Turbo family cutoff; day not established.
+    # Source: https://developers.openai.com/api/docs/models/gpt-3.5-turbo
+    training_cutoff: "2021-09"
     profile: openai_chat
     question_parser: untagged
     price_per_million:
@@ -239,45 +335,75 @@ models:
     - 2
   legacy_davinci_002:
     id: davinci-002
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/davinci-002
+    training_cutoff: "2021-09-01"
     profile: openai_base
     price_per_million:
     - 2
     - 2
   legacy_babbage_002:
     id: babbage-002
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/babbage-002
+    training_cutoff: "2021-09-01"
     profile: openai_base
     price_per_million:
     - 0.4
     - 0.4
   legacy_text_davinci_003:
     id: text-davinci-003
+    # ESTIMATE: Table 2.1 reports Sep 2021; other publications report Jun 2021. Use the later credible date.
+    # Source: https://munin.uit.no/bitstream/handle/10037/29565/thesis.pdf?sequence=2
+    training_cutoff: "2021-09"
     profile: openai_base
     price_per_million:
     - 20
     - 20
   legacy_text_davinci_002:
     id: text-davinci-002
+    # ESTIMATE: AAAI-24 Task Contamination paper, Table 1; retired model lacks current provider cutoff docs.
+    # Source: https://ojs.aaai.org/index.php/AAAI/article/download/29808/31400
+    training_cutoff: "2021-06"
     profile: openai_base
     price_per_million:
     - 20
     - 20
   legacy_gpt_4_base:
     id: gpt-4-base
+    # ESTIMATE: research-only base model; Table 3 reports Jan 2022, later than the usual Sep 2021 proxy.
+    # Source: https://proceedings.neurips.cc/paper_files/paper/2024/file/7537726385a4a6f94321e3adf8bd827e-Paper-Datasets_and_Benchmarks_Track.pdf
+    training_cutoff: "2022-01"
     profile: openai_base
   legacy_gpt_3_5_turbo_instruct:
     id: gpt-3.5-turbo-instruct
+    # Published knowledge cutoff (proxy for training-data cutoff).
+    # Source: https://developers.openai.com/api/docs/models/gpt-3.5-turbo-instruct
+    training_cutoff: "2021-09-01"
     profile: openai_base
   legacy_claude_instant_1:
     id: claude-instant-1
+    # ESTIMATE: serving-provider knowledge cutoff for the legacy alias; exact training date unpublished.
+    # Source: https://openrouter.ai/anthropic/claude-instant-1
+    training_cutoff: "2023-01"
     profile: anthropic_legacy
   legacy_claude_2_0:
     id: claude-2.0
+    # ESTIMATE: serving-provider Feb 2023 is consistent with Anthropic's broader early-2023 model card.
+    # Source: https://openrouter.ai/anthropic/claude-2.0
+    training_cutoff: "2023-02"
     profile: anthropic_legacy
   legacy_claude_v1_3:
     id: claude-v1.3
+    # ESTIMATE: Claude v1 family cutoff; no authoritative cutoff found for the exact v1.3 snapshot.
+    # Source: https://openrouter.ai/anthropic/claude-1
+    training_cutoff: "2023-01"
     profile: anthropic_legacy
     max_concurrency: 30
   legacy_claude_2_1:
     id: claude-2.1
+    # ESTIMATE: serving-provider date; other credible reports say Jan 2023. Use the later credible date.
+    # Source: https://openrouter.ai/anthropic/claude-2.1
+    training_cutoff: "2023-03-31"
     profile: anthropic_legacy
     argument_parser: legacy_claude

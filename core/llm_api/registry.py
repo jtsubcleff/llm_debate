@@ -70,6 +70,14 @@ def resolve_model(name: str) -> dict:
         raise ValueError(
             f"Unsupported endpoint for {spec['provider']}: {spec['endpoint']}"
         )
+    effort = spec.get("reasoning_effort")
+    if effort is not None:
+        if spec["provider"] != "openrouter":
+            raise ValueError(
+                "reasoning_effort is currently supported for OpenRouter model profiles only"
+            )
+        if effort not in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+            raise ValueError(f"Invalid reasoning_effort for {name}: {effort!r}")
     return spec
 
 

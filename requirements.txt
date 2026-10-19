@@ -7,6 +7,7 @@ datasets
 fastapi==0.100.0
 fire
 hydra-core
+ipywidgets
 matplotlib
 openai>=2.54.0,<3.0.0
 pandas

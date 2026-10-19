@@ -11,6 +11,10 @@ from pathlib import Path
 import chess
 
 BUCKETS = ("Low", "Medium", "High")
+<<<<<<< HEAD
+=======
+PUZZLES_CSV_PATH = "chess_data/lichess_post_2024-06-01.csv"
+>>>>>>> ded8e85 (Add chess direct QA experiment)
 
 
 def rating_bucket(rating: int) -> str:
@@ -34,7 +38,11 @@ class ChessPuzzle:
         return asdict(self)
 
 
+<<<<<<< HEAD
 def load_puzzles(path=Path("chess_data/lichess_puzzles.csv")):
+=======
+def load_puzzles(path=Path(PUZZLES_CSV_PATH)):
+>>>>>>> ded8e85 (Add chess direct QA experiment)
     buckets = {bucket: [] for bucket in BUCKETS}
     seen = set()
     with Path(path).open(newline="", encoding="utf-8-sig") as stream:
