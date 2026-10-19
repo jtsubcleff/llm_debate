@@ -39,6 +39,7 @@ def setup_environment(
     logger_level: str = "info",
     openai_tag: str = "API_KEY",
     organization: str = None,
+    openrouter_tag: str = "OPENROUTER_API_KEY",
 ):
     setup_logging(logger_level)
     secrets = load_secrets("SECRETS")
@@ -46,6 +47,8 @@ def setup_environment(
         os.environ["OPENAI_API_KEY"] = secrets[openai_tag]
     if secrets.get(anthropic_tag):
         os.environ["ANTHROPIC_API_KEY"] = secrets[anthropic_tag]
+    if secrets.get(openrouter_tag):
+        os.environ["OPENROUTER_API_KEY"] = secrets[openrouter_tag]
     if organization is not None:
         os.environ["OPENAI_ORG_ID"] = secrets[organization]
 

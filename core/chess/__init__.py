@@ -1,0 +1,1 @@
+"""Shared chess experiment components."""

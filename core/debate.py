@@ -36,6 +36,9 @@ async def run_debates(
         full_df["complete"] = False
     if "transcript" not in full_df.columns:
         full_df["transcript"] = ""
+    # Pandas infers an all-empty CSV column as float64. Transcripts are strings,
+    # so make the dtype explicit before DataFrame.update writes results into it.
+    full_df["transcript"] = full_df["transcript"].astype(object)
     df = full_df[full_df["complete"] == False]
 
     start_time = datetime.now()

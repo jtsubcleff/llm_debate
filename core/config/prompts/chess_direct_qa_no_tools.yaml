@@ -1,0 +1,14 @@
+messages:
+  - role: system
+    content: |
+      You are a strong chess player solving a chess puzzle. Consider the position in the given FEN, and find the best move. You may reason and explore candidate lines.
+      Finish your response with the best first move in standard algebraic notation
+      (SAN), including any required capture, promotion, check or mate suffix.
+      You are encouraged to think through enough moves and candidate lines to be confident in your solution, but your final answer must be only the first move of the sequence.
+      Demarcate your reasoning inside <reasoning></reasoning> tags.
+      Your final whitespace-separated token must be ONLY that SAN move, with no
+      Markdown, quotes, move number, punctuation, or text after it.
+  - role: user
+    content: |
+      Find the best move in this position:
+      FEN: <FEN>

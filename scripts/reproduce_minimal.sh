@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eoux pipefail
 
-exp_dir=./exp/minimal
+exp_dir=./exp/minimal2
 mkdir -p $exp_dir
 
 # Model roles are configured centrally in core/config/models.yaml.

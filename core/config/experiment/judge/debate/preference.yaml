@@ -1,5 +1,5 @@
 judge_type: "quality"
-use_logprobs: true
+use_logprobs: false
 few_shot_num_samples: 0
 n_vote: 0
 few_shot_base: null

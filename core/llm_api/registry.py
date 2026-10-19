@@ -59,11 +59,12 @@ def resolve_model(name: str) -> dict:
     # A requested snapshot must stay pinned rather than silently use the alias.
     if name in entry.get("aliases", []):
         spec["id"] = name
-    if spec["provider"] not in ("openai", "anthropic"):
+    if spec["provider"] not in ("openai", "anthropic", "openrouter"):
         raise ValueError(f"Unsupported provider: {spec['provider']}")
     endpoints = {
         "openai": ("chat", "responses", "completions"),
         "anthropic": ("messages", "completions"),
+        "openrouter": ("chat",),
     }
     if spec["endpoint"] not in endpoints[spec["provider"]]:
         raise ValueError(

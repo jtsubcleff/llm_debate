@@ -2,10 +2,10 @@
 # Prices are USD per million tokens; omitted prices mean unknown, never free.
 # Reviewed 2026-10-17. Legacy entries do not imply continued provider availability.
 roles:
-  debater: openai_balanced
+  debater: openrouter_gpt_oss_120b
   correct_debater: debater
   incorrect_debater: debater
-  judge: judge_4o_mini
+  judge: openrouter_gpt_oss_20b
   preference: judge
   critic: debater
   critique_judge: judge
@@ -19,10 +19,14 @@ groups:
   - anthropic_small
   - anthropic_balanced
   - anthropic_strong
+  - openrouter_gpt_oss_20b
+  - openrouter_gpt_oss_120b
   judges:
   - judge_4o_mini
   - judge_41_mini
   - judge_5_mini
+  - openrouter_gpt_oss_20b
+  - openrouter_gpt_oss_120b
 profiles:
   openai_chat:
     provider: openai
@@ -68,6 +72,14 @@ profiles:
     multiple_completions: false
     tokenizer: cl100k_base
     default_max_tokens: 2048
+  openrouter_chat:
+    provider: openrouter
+    endpoint: chat
+    sampling: true
+    logprobs: false
+    multiple_completions: false
+    tokenizer: o200k_base
+    default_max_tokens: 8192
 models:
   openai_strong:
     id: gpt-6-astra
@@ -134,6 +146,18 @@ models:
   anthropic_small:
     id: claude-haiku-5-5
     profile: anthropic_messages
+  openrouter_gpt_oss_120b:
+    id: openai/gpt-oss-120b
+    profile: openrouter_chat
+    price_per_million:
+    - 0.03
+    - 0.17
+  openrouter_gpt_oss_20b:
+    id: openai/gpt-oss-20b
+    profile: openrouter_chat
+    price_per_million:
+    - 0.02
+    - 0.1
   legacy_gpt_4:
     id: gpt-4
     profile: openai_chat

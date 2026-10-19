@@ -27,6 +27,7 @@ from core.llm_api.errors import is_credit_exhaustion
 from core.llm_api.registry import estimate_cost
 from core.llm_api.registry import price_per_token as registry_price
 from core.llm_api.registry import resolve_model
+from core.llm_api.tool_calls import responses_input
 
 OAIChatPrompt = list[dict[str, str]]
 OAIBasePrompt = Union[str, list[str]]
@@ -91,13 +92,20 @@ class Resource:
 class OpenAIModel(ModelAPIProtocol):
     frac_rate_limit: float
     organization: Optional[str]
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
     print_prompt_and_response: bool = False
     model_ids: set[str] = attrs.field(init=False, default=attrs.Factory(set))
 
     client: AsyncOpenAI = attrs.field(
         init=False,
         default=attrs.Factory(
-            lambda self: AsyncOpenAI(organization=self.organization, max_retries=0),
+            lambda self: AsyncOpenAI(
+                api_key=self.api_key,
+                organization=self.organization,
+                base_url=self.base_url,
+                max_retries=0,
+            ),
             takes_self=True,
         ),
     )
@@ -286,7 +294,8 @@ class OpenAIChatModel(OpenAIModel):
         num_tokens = 0
         for message in prompt:
             num_tokens += 1
-            num_tokens += len(message["content"]) / 4
+            num_tokens += len(json.dumps(message)) / 4
+        num_tokens += len(json.dumps(kwargs.get("tools", []))) / 4
 
         return max(
             MIN_NUM_TOKENS,
@@ -322,8 +331,16 @@ class OpenAIChatModel(OpenAIModel):
             n = params.pop("n", 1)
             if n != 1:
                 raise ValueError("Responses requires one request per completion")
+            if "tools" in params:
+                params["tools"] = [
+                    dict(type="function", **tool["function"])
+                    for tool in params["tools"]
+                ]
             response = await self.client.responses.create(
-                model=model_id, input=prompt, max_output_tokens=max_tokens, **params
+                model=model_id,
+                input=responses_input(prompt),
+                max_output_tokens=max_tokens,
+                **params,
             )
             if response.status not in ("completed", "incomplete"):
                 raise RuntimeError(
@@ -339,6 +356,20 @@ class OpenAIChatModel(OpenAIModel):
                 LLMResponse(
                     model_id=model_id,
                     completion=response.output_text,
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    response_items=[
+                        item.model_dump(exclude_none=True) for item in response.output
+                    ],
+                    tool_calls=[
+                        dict(
+                            id=item.call_id,
+                            type="function",
+                            function=dict(name=item.name, arguments=item.arguments),
+                        )
+                        for item in response.output
+                        if item.type == "function_call"
+                    ],
                     stop_reason=reason,
                     duration=time.time() - start_time,
                     api_duration=time.time() - api_start,
@@ -356,16 +387,25 @@ class OpenAIChatModel(OpenAIModel):
             messages=prompt, model=model_id, max_tokens=max_tokens, **params
         )
         # Split billed usage across choices; aggregate cost counts every token once.
-        cost = estimate_cost(
-            model_id,
-            api_response.usage.prompt_tokens,
-            api_response.usage.completion_tokens,
-        )
+        cost = getattr(api_response.usage, "cost", None)
+        if cost is None:
+            cost = estimate_cost(
+                model_id,
+                api_response.usage.prompt_tokens,
+                api_response.usage.completion_tokens,
+            )
         return [
             LLMResponse(
                 model_id=model_id,
                 completion=choice.message.content or "",
                 stop_reason=choice.finish_reason,
+                input_tokens=api_response.usage.prompt_tokens
+                / len(api_response.choices),
+                output_tokens=api_response.usage.completion_tokens
+                / len(api_response.choices),
+                tool_calls=[
+                    call.model_dump() for call in (choice.message.tool_calls or [])
+                ],
                 api_duration=time.time() - api_start,
                 duration=time.time() - start_time,
                 cost=None if cost is None else cost / len(api_response.choices),
@@ -383,12 +423,29 @@ class OpenAIChatModel(OpenAIModel):
         for prompt in prompts:
             role, text = prompt["role"], prompt["content"]
             cprint(f"=={role.upper()}:", "white")
-            cprint(text, PRINT_COLORS[role])
+            cprint(text, PRINT_COLORS.get(role, "cyan"))
         for i, response in enumerate(responses):
             if len(responses) > 1:
                 cprint(f"==RESPONSE {i + 1} ({response.model_id}):", "white")
             cprint(response.completion, PRINT_COLORS["assistant"], attrs=["bold"])
         print()
+
+
+class OpenRouterChatModel(OpenAIChatModel):
+    """OpenRouter's OpenAI-compatible chat endpoint, using shared chat handling."""
+
+    def _assert_valid_id(self, model_id: str):
+        spec = resolve_model(model_id)
+        if spec["provider"] != "openrouter" or spec["endpoint"] != "chat":
+            raise ValueError(f"Not an OpenRouter chat model: {model_id}")
+
+    async def _make_api_call(self, prompt, model_id, start_time, **params):
+        # Request OpenRouter's actual billed cost alongside its token usage.
+        extra_body = dict(params.pop("extra_body", {}) or {})
+        extra_body.setdefault("usage", {"include": True})
+        return await super()._make_api_call(
+            prompt, model_id, start_time, extra_body=extra_body, **params
+        )
 
 
 class OpenAIBaseModel(OpenAIModel):

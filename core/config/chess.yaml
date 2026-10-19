@@ -1,0 +1,25 @@
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${exp_dir}/logs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+exp_dir: ./exp/chess_direct_qa
+protocol: direct_qa
+dataset_path: chess_data/lichess_puzzles.csv
+models: [judge]
+limit: 30
+seed: 0
+max_tokens: 8192
+max_tool_rounds: 10
+use_tools: true
+temperature: 0.2
+num_threads: 20
+logging: INFO
+anthropic_tag: ANTHROPIC_API_KEY
+openai_tag: API_KEY
+organization: DEFAULT_ORG
+anthropic_num_threads: 80
+openai_fraction_rate_limit: 0.9
+print_prompt_and_response: false

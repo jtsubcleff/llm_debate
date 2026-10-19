@@ -144,3 +144,4 @@ prompt_history/*
 prompt_history
 wandb/
 .hydra/
+chess_data/lichess_db_puzzle.csv.zst

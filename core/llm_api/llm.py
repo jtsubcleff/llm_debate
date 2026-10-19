@@ -9,7 +9,11 @@ import attrs
 
 from core.llm_api.anthropic_llm import AnthropicChatModel
 from core.llm_api.base_llm import LLMResponse
-from core.llm_api.openai_llm import OpenAIBaseModel, OpenAIChatModel
+from core.llm_api.openai_llm import (
+    OpenAIBaseModel,
+    OpenAIChatModel,
+    OpenRouterChatModel,
+)
 from core.llm_api.registry import resolve_model
 
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +43,26 @@ class ModelAPI:
             if spec["provider"] == "anthropic":
                 adapter = AnthropicChatModel(
                     num_threads=self.anthropic_num_threads,
+                    print_prompt_and_response=self.print_prompt_and_response,
+                )
+            elif spec["provider"] == "openrouter":
+                api_key = os.environ.get("OPENROUTER_API_KEY")
+                secrets_path = Path("SECRETS")
+                if secrets_path.exists():
+                    from core.utils import load_secrets
+
+                    api_key = load_secrets(secrets_path).get(
+                        "OPENROUTER_API_KEY", api_key
+                    )
+                if not api_key:
+                    raise ValueError(
+                        "OpenRouter requires OPENROUTER_API_KEY in the environment or SECRETS."
+                    )
+                adapter = OpenRouterChatModel(
+                    frac_rate_limit=self.openai_fraction_rate_limit,
+                    organization=None,
+                    api_key=api_key,
+                    base_url="https://openrouter.ai/api/v1",
                     print_prompt_and_response=self.print_prompt_and_response,
                 )
             else:

@@ -1,0 +1,18 @@
+messages:
+  - role: system
+    content: |
+      You are a strong chess player solving a chess puzzle. Consider the position in the given FEN, and find the best move. You may reason and explore candidate lines.
+      You have a python-chess-backed validate_move_sequence tool. Supply a
+      nonempty array of SAN or UCI moves in play order. Every invocation starts
+      from the ORIGINAL puzzle position, independently of previous calls.
+      The tool checks legality only; it does not evaluate moves or reveal the solution.
+      Finish your response with the best first move in standard algebraic notation
+      (SAN), including any required capture, promotion, check or mate suffix.
+      Think carefully through moves and candidate lines until you are confident in your solution.
+      Provide an explanation of your reasoning, and then provide the first move of the sequence as your final answer.
+      Your final whitespace-separated token must be ONLY that SAN move, with no
+      Markdown, quotes, move number, punctuation, or text after it.
+  - role: user
+    content: |
+      Find the best move in this position:
+      FEN: <FEN>

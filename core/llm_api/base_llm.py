@@ -55,12 +55,15 @@ class StopReason(Enum):
     MAX_TOKENS = auto()
     STOP_SEQUENCE = auto()
     REFUSAL = auto()
+    TOOL_CALL = auto()
 
     @classmethod
     def factory(cls, stop_reason: str) -> "StopReason":
         """
         Parses the openai and anthropic stop reasons into a StopReason enum.
         """
+        if stop_reason in ("tool_calls", "tool_use"):
+            return cls.TOOL_CALL
         if stop_reason in ["max_tokens", "length"]:
             return cls.MAX_TOKENS
         elif stop_reason in ["stop_sequence", "stop", "end_turn", "completed"]:
@@ -83,6 +86,11 @@ class LLMResponse:
     api_duration: Optional[float] = None
     logprobs: Optional[list[dict[str, float]]] = None
 
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    tool_calls: list[dict] = attrs.field(factory=list)
+    response_items: Optional[list[dict]] = None
+
     def to_dict(self):
         return {
             "model_id": self.model_id,
@@ -92,6 +100,10 @@ class LLMResponse:
             "api_duration": self.api_duration,
             "cost": self.cost,
             "logprobs": self.logprobs,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "tool_calls": self.tool_calls,
+            "response_items": self.response_items,
         }
 
 

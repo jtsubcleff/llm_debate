@@ -21,6 +21,7 @@ from core.llm_api.base_llm import (
 )
 from core.llm_api.errors import is_credit_exhaustion
 from core.llm_api.registry import estimate_cost, resolve_model
+from core.llm_api.tool_calls import anthropic_messages
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class AnthropicChatModel(ModelAPIProtocol):
             else [dict(m) for m in prompt]
         )
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
-        messages = [m for m in messages if m["role"] != "system"]
+        messages = anthropic_messages([m for m in messages if m["role"] != "system"])
         if not messages:
             raise ValueError("Claude requires at least one non-system message")
         if (
@@ -56,6 +57,17 @@ class AnthropicChatModel(ModelAPIProtocol):
                 "This model does not support assistant prefill. Move the output-format instruction into the user prompt."
             )
         request = {**spec.get("request_defaults", {}), **params}
+        if "tools" in request:
+            request["tools"] = [
+                dict(
+                    name=t["function"]["name"],
+                    description=t["function"]["description"],
+                    input_schema=t["function"]["parameters"],
+                )
+                for t in request["tools"]
+            ]
+        if request.get("tool_choice") == "none":
+            request["tool_choice"] = {"type": "none"}
         request["max_tokens"] = request.get("max_tokens") or spec["default_max_tokens"]
         if not spec.get("sampling", False):
             request.pop("temperature", None)
@@ -131,6 +143,28 @@ class AnthropicChatModel(ModelAPIProtocol):
         result = LLMResponse(
             model_id=spec["id"],
             completion=completion,
+            input_tokens=response.usage.input_tokens
+            if spec["endpoint"] == "messages"
+            else None,
+            output_tokens=response.usage.output_tokens
+            if spec["endpoint"] == "messages"
+            else None,
+            response_items=[
+                block.model_dump(exclude_none=True) for block in response.content
+            ]
+            if spec["endpoint"] == "messages"
+            else None,
+            tool_calls=[
+                dict(
+                    id=block.id,
+                    type="function",
+                    function=dict(name=block.name, arguments=json.dumps(block.input)),
+                )
+                for block in response.content
+                if block.type == "tool_use"
+            ]
+            if spec["endpoint"] == "messages"
+            else [],
             stop_reason=response.stop_reason,
             cost=cost,
             duration=time.time() - start,

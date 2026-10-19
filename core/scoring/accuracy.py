@@ -14,11 +14,21 @@ LOGGER = logging.getLogger(__name__)
 
 
 def find_answer(text, letter):
-    pattern = re.compile(
-        f"^(?:Final )?Answer: (<{letter}>|{letter})(?:\n|$)", re.MULTILINE
-    )
-    matches = pattern.findall(text)
-    found_match = len(matches) > 0
+    # Use the final explicit answer marker. It may appear inside a thinking block,
+    # and can be followed by a closing tag or other text on the same line.
+    answer_markers = list(re.finditer(r"Answer:", text, flags=re.IGNORECASE))
+    if answer_markers:
+        answer_text = text[answer_markers[-1].end() :]
+        answer_match = re.match(
+            r"\s*<?\s*([AB])(?:\s*>|(?=\s|$|[.,!?;:]))",
+            answer_text,
+            flags=re.IGNORECASE,
+        )
+        return (
+            answer_match is not None and answer_match.group(1).upper() == letter.upper()
+        )
+
+    found_match = False
     if f"correct answer is most likely to be ({letter}" in text:
         found_match = True
     final_line = text.strip().splitlines()[-1]
