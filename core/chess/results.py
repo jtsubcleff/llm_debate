@@ -26,22 +26,11 @@ def write_csv(frame, path):
 
 def aggregate_results(exp_dir, protocol="direct_qa"):
     rows = []
-<<<<<<< HEAD
-=======
     frames = []
->>>>>>> ded8e85 (Add chess direct QA experiment)
     for path in sorted((Path(exp_dir) / protocol).glob("*/puzzles.csv")):
         df = pd.read_csv(
             path,
             keep_default_na=False,
-<<<<<<< HEAD
-            usecols=["model", "complete", "correct", "rating_bucket"],
-            dtype={"model": str},
-        )
-        done = df[df.complete.astype(str).str.lower() == "true"]
-        row = dict(
-            model=df.model.iloc[0],
-=======
             usecols=lambda name: name
             in {"model", "questioner", "complete", "correct", "rating_bucket"},
             dtype={"model": str},
@@ -53,25 +42,17 @@ def aggregate_results(exp_dir, protocol="direct_qa"):
         done = df[df.complete.astype(str).str.lower() == "true"]
         row = dict(
             model=model[0] if protocol == "consultancy" else model,
->>>>>>> ded8e85 (Add chess direct QA experiment)
             protocol=protocol,
             planned=len(df),
             completed=len(done),
         )
-<<<<<<< HEAD
-=======
         if protocol == "consultancy":
             row["questioner"] = model[1]
->>>>>>> ded8e85 (Add chess direct QA experiment)
         for bucket in (*BUCKETS, "all"):
             subset = done if bucket == "all" else done[done.rating_bucket == bucket]
             successes = subset.correct.astype(str).str.lower().eq("true").sum()
             row[bucket] = successes / len(subset) if len(subset) else None
             row[f"{bucket}_count"] = len(subset)
-<<<<<<< HEAD
-        rows.append(row)
-    write_csv(pd.DataFrame(rows), Path(exp_dir) / "results.csv")
-=======
         if protocol == "judge":
             row["accuracy"] = 100 * row["all"] if row["all"] is not None else None
         rows.append(row)
@@ -126,4 +107,3 @@ def print_run_cost(exp_dir, protocol="direct_qa"):
     unknown = frame.cost.isna().sum()
     suffix = f" + unknown costs for {unknown} puzzle(s)" if unknown else ""
     print(f"Total estimated cost (USD): ${frame.cost.sum():,.6f}{suffix}")
->>>>>>> ded8e85 (Add chess direct QA experiment)

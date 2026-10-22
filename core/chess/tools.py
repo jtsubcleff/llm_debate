@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-"""Puzzle-scoped move validation, with no engine or solution access."""
-=======
 """Chess board utilities, with no engine or solution access."""
->>>>>>> ded8e85 (Add chess direct QA experiment)
 
 import chess
 
@@ -44,8 +40,6 @@ def validate_move_sequence(fen: str, moves: list[str]) -> dict:
         except ValueError:
             return dict(legal=False, fen=None, first_illegal_move=token)
     return dict(legal=True, fen=board.fen(), first_illegal_move=None)
-<<<<<<< HEAD
-=======
 
 
 DISPLAY_BOARD_UNICODE = {
@@ -80,4 +74,3 @@ def display_board_unicode(fen: str) -> str:
     if not isinstance(fen, str):
         raise ValueError("fen must be a FEN string")
     return chess.Board(fen).unicode()
->>>>>>> ded8e85 (Add chess direct QA experiment)

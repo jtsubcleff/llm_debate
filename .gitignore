@@ -145,8 +145,5 @@ prompt_history
 wandb/
 .hydra/
 chess_data/lichess_db_puzzle.csv.zst
-<<<<<<< HEAD
-=======
 *.zst.rows.json
 lichess_game_dates.sqlite3*
->>>>>>> ded8e85 (Add chess direct QA experiment)

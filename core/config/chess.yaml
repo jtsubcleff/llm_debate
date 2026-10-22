@@ -7,21 +7,14 @@ hydra:
 
 exp_dir: ./exp/chess_direct_qa
 protocol: direct_qa
-<<<<<<< HEAD
-=======
 num_rounds: 3
 transcripts_dir: null
->>>>>>> ded8e85 (Add chess direct QA experiment)
 dataset_path: chess_data/lichess_puzzles.csv
 models: [judge]
 limit: 30
 seed: 0
 max_tokens: 8192
-<<<<<<< HEAD
-max_tool_rounds: 10
-=======
 max_tool_rounds: 4
->>>>>>> ded8e85 (Add chess direct QA experiment)
 use_tools: true
 temperature: 0.2
 num_threads: 20
@@ -31,8 +24,5 @@ openai_tag: API_KEY
 organization: DEFAULT_ORG
 anthropic_num_threads: 80
 openai_fraction_rate_limit: 0.9
-<<<<<<< HEAD
-=======
 openrouter_timeout: 600
->>>>>>> ded8e85 (Add chess direct QA experiment)
 print_prompt_and_response: false

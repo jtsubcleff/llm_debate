@@ -440,11 +440,6 @@ class OpenAIChatModel(OpenAIModel):
         print()
 
 
-<<<<<<< HEAD
-class OpenRouterChatModel(OpenAIChatModel):
-    """OpenRouter's OpenAI-compatible chat endpoint, using shared chat handling."""
-
-=======
 @attrs.define
 class OpenRouterChatModel(OpenAIChatModel):
     """OpenRouter's OpenAI-compatible chat endpoint, using shared chat handling."""
@@ -453,7 +448,6 @@ class OpenRouterChatModel(OpenAIChatModel):
     # the same longer budget so neither cancels the response prematurely.
     request_timeout: float = attrs.field(default=600, validator=attrs.validators.gt(0))
 
->>>>>>> ded8e85 (Add chess direct QA experiment)
     def _assert_valid_id(self, model_id: str):
         spec = resolve_model(model_id)
         if spec["provider"] != "openrouter" or spec["endpoint"] != "chat":
@@ -461,9 +455,6 @@ class OpenRouterChatModel(OpenAIChatModel):
 
     async def _make_api_call(self, prompt, model_id, start_time, **params):
         # Request OpenRouter's actual billed cost alongside its token usage.
-<<<<<<< HEAD
-        extra_body = dict(params.pop("extra_body", {}) or {})
-=======
         spec = resolve_model(model_id)
         defaults = dict(spec.get("request_defaults", {}).get("extra_body", {}) or {})
         overrides = dict(params.pop("extra_body", {}) or {})
@@ -477,7 +468,6 @@ class OpenRouterChatModel(OpenAIChatModel):
         reasoning.update(overrides.get("reasoning", {}) or {})
         if reasoning:
             extra_body["reasoning"] = reasoning
->>>>>>> ded8e85 (Add chess direct QA experiment)
         extra_body.setdefault("usage", {"include": True})
         return await super()._make_api_call(
             prompt, model_id, start_time, extra_body=extra_body, **params

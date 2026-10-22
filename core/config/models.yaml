@@ -183,10 +183,6 @@ models:
     # Source: https://platform.claude.com/docs/en/models/haiku-5-5/overview
     training_cutoff: "2026-06"
     profile: anthropic_messages
-<<<<<<< HEAD
-  openrouter_gpt_oss_120b:
-    id: openai/gpt-oss-120b
-=======
     # Standard USD/MTok for prompts <=100K tokens, verified 2026-10-20.
     # Prompts >100K cost $0.50 input / $2.50 output per MTok;
     # the current fixed-rate estimator does not model this higher tier.
@@ -199,22 +195,17 @@ models:
     # Published knowledge cutoff (proxy for training-data cutoff).
     # Source: https://developers.openai.com/api/docs/models/gpt-oss-120b
     training_cutoff: "2024-06-01"
->>>>>>> ded8e85 (Add chess direct QA experiment)
     profile: openrouter_chat
     price_per_million:
     - 0.03
     - 0.17
   openrouter_gpt_oss_20b:
     id: openai/gpt-oss-20b
-<<<<<<< HEAD
-    profile: openrouter_chat
-=======
     # Published knowledge cutoff (proxy for training-data cutoff).
     # Source: https://developers.openai.com/api/docs/models/gpt-oss-20b
     training_cutoff: "2024-06-01"
     profile: openrouter_chat
     #reasoning_effort: low  # Optional; changing this requires a new exp_dir.
->>>>>>> ded8e85 (Add chess direct QA experiment)
     price_per_million:
     - 0.02
     - 0.1
