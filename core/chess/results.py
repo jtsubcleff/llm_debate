@@ -32,7 +32,16 @@ def aggregate_results(exp_dir, protocol="direct_qa"):
             path,
             keep_default_na=False,
             usecols=lambda name: name
-            in {"model", "questioner", "complete", "correct", "rating_bucket"},
+            in {
+                "model",
+                "proposer",
+                "questioner",
+                "condition",
+                "num_rounds",
+                "complete",
+                "correct",
+                "rating_bucket",
+            },
             dtype={"model": str},
         )
         frames.append(df)
@@ -57,11 +66,42 @@ def aggregate_results(exp_dir, protocol="direct_qa"):
             row["accuracy"] = 100 * row["all"] if row["all"] is not None else None
         rows.append(row)
     write_csv(pd.DataFrame(rows), Path(exp_dir) / "results.csv")
+    if protocol == "judge" and "proposer" in combined:
+        columns = [
+            c
+            for c in ("model", "proposer", "questioner", "condition", "num_rounds")
+            if c in combined
+        ]
+        paired = []
+        for key, group in combined.groupby(columns, sort=True, dropna=False):
+            done = group[group.complete.astype(str).str.lower().eq("true")]
+            paired.append(
+                dict(
+                    zip(columns, key),
+                    planned=len(group),
+                    completed=len(done),
+                    accuracy=100
+                    * done.correct.astype(str).str.lower().eq("true").mean()
+                    if len(done)
+                    else None,
+                )
+            )
+        write_csv(pd.DataFrame(paired), Path(exp_dir) / "pair_results.csv")
 
 
 def print_run_cost(exp_dir, protocol="direct_qa"):
     """Report recorded usage/cost once, including prior checkpoints on resume."""
     exp_dir = Path(exp_dir)
+    if protocol == "research_suite":
+        path = exp_dir / "costs.csv"
+        if path.exists():
+            frame = pd.read_csv(path)
+            print(
+                f"\nRecorded suite cost (USD): ${frame.cost.sum():,.6f}; "
+                f"{int(frame.api_calls.sum())} unique cached responses; "
+                f"{int(frame.unknown_cost_calls.sum())} responses with unknown cost"
+            )
+        return
     roots = (
         [exp_dir / "direct_qa", exp_dir / "judgements" / "judge"]
         if protocol == "proposer_judge"

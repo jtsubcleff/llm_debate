@@ -4,7 +4,7 @@
 
 This is a fork of the code release of the paper [Debating with More Persuasive LLMs Leads to More Truthful Answers](https://arxiv.org/abs/2402.06782)
 
-It adapts and extends the methodology from this paper to a dataset comprised of lichess puzzles. See [README_chess.md](README_chess.md) for information related to this experiment.
+It adapts and extends the methodology to test a proposer-critic variant of debate on a chess puzzle dataset. This adaptation tests a reasoning asymmetry rather than an information asymmetry. See [README_chess.md](README_chess.md) for information related to this experiment.
 
 ## Setup
 

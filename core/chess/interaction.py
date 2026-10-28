@@ -1,16 +1,21 @@
 """Checkpointed chess interaction experiments; final judging runs separately."""
 
 import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
 
 import pandas as pd
 
-from core.chess.protocols.direct_qa import prompt_template_name
-from core.chess.protocols.interaction import run_interaction, turn_schedule
+from core.chess.protocols.interaction import (
+    interaction_prefix,
+    run_interaction,
+    turn_schedule,
+)
 from core.chess.results import aggregate_results, write_csv, write_json
 from core.chess.tools import CHESS_TOOLS, TOOL_COUNT_FIELDS
+from core.chess.word_limits import PUBLIC_WORD_LIMITS
 from core.llm_api.registry import resolve_model
 from core.load.chess import load_puzzles, sample_puzzles
 from core.prompts import load_template
@@ -40,7 +45,7 @@ def interaction_models(cfg):
     return jobs
 
 
-async def run_interactions(cfg, api):
+async def run_interactions(cfg, api, puzzles=None, openings=None, prompt_template=None):
     from core.chess.run import model_directory
 
     turn_schedule(cfg.protocol, cfg.num_rounds)
@@ -49,11 +54,15 @@ async def run_interactions(cfg, api):
             "Require max_tokens > 0, max_tool_rounds >= 0, num_threads > 0"
         )
     jobs = interaction_models(cfg)
-    puzzles = sample_puzzles(load_puzzles(Path(cfg.dataset_path)), cfg.limit, cfg.seed)
+    if puzzles is None:
+        puzzles = sample_puzzles(
+            load_puzzles(Path(cfg.dataset_path)), cfg.limit, cfg.seed
+        )
     exp_dir = Path(cfg.exp_dir)
     settings = dict(
         protocol=cfg.protocol,
-        transcript_content="public_text_only_v1",
+        transcript_content="final_public_argument_anonymous_v2",
+        word_limits=PUBLIC_WORD_LIMITS,
         num_rounds=cfg.num_rounds,
         use_tools=cfg.use_tools,
         seed=cfg.seed,
@@ -61,11 +70,19 @@ async def run_interactions(cfg, api):
         max_tokens=cfg.max_tokens,
         max_tool_rounds=cfg.max_tool_rounds,
         temperature=cfg.temperature,
-        prompt=load_template(prompt_template_name(cfg.use_tools)),
-        interaction_prompt=load_template("chess_interaction"),
+        interaction_prompt=prompt_template
+        if prompt_template is not None
+        else load_template("chess_interaction"),
         tool=CHESS_TOOLS if cfg.use_tools else None,
         puzzles=[p.to_dict() for p in puzzles],
     )
+    if openings is not None:
+        settings["openings"] = {
+            f"{model}:{puzzle_id}": hashlib.sha256(
+                json.dumps(value, sort_keys=True).encode()
+            ).hexdigest()
+            for (model, puzzle_id), value in sorted(openings.items())
+        }
     manifest = exp_dir / "chess_run.json"
     if manifest.exists() and json.loads(manifest.read_text()) != settings:
         raise ValueError("Experiment settings or sample changed; choose a new exp_dir")
@@ -129,19 +146,31 @@ async def run_interactions(cfg, api):
 
     async def evaluate(key, index, puzzle, cache):
         async with semaphore:
-            result = await run_interaction(
-                api,
-                key[0],
-                puzzle,
-                cache,
-                cfg.protocol,
-                cfg.num_rounds,
-                questioner_model=key[1],
-                max_tokens=cfg.max_tokens,
-                max_tool_rounds=cfg.max_tool_rounds,
-                temperature=cfg.temperature,
-                use_tools=cfg.use_tools,
+            opening = (
+                openings[(key[0], puzzle.puzzleId)] if openings is not None else None
             )
+            if opening is not None and not opening["proposal_valid"]:
+                # Refused/truncated/missing openings cannot support a judgement.
+                result = interaction_prefix(
+                    opening, puzzle, cfg.protocol, cfg.num_rounds
+                )
+                result["excluded_invalid_proposal"] = True
+            else:
+                result = await run_interaction(
+                    api,
+                    key[0],
+                    puzzle,
+                    cache,
+                    cfg.protocol,
+                    cfg.num_rounds,
+                    questioner_model=key[1],
+                    max_tokens=cfg.max_tokens,
+                    max_tool_rounds=cfg.max_tool_rounds,
+                    temperature=cfg.temperature,
+                    use_tools=cfg.use_tools,
+                    opening_result=opening,
+                    instructions=settings["interaction_prompt"],
+                )
             frame = frames[key]
             for field, value in result.items():
                 if field not in frame:
@@ -152,7 +181,9 @@ async def run_interactions(cfg, api):
             LOGGER.info(
                 "%s %s puzzle %s: complete=%s correct=%s",
                 cfg.protocol,
-                key,
+                f"opening proposer={key[0]}"
+                if cfg.protocol == "consultancy" and cfg.num_rounds == 1
+                else key,
                 puzzle.puzzleId,
                 result["complete"],
                 result["correct"],
@@ -160,7 +191,10 @@ async def run_interactions(cfg, api):
             return result
 
     results = await asyncio.gather(*(evaluate(*item) for item in pending))
-    if any(not result["complete"] for result in results):
+    if any(
+        not result["complete"] and not result.get("excluded_invalid_proposal", False)
+        for result in results
+    ):
         raise RuntimeError(
             "Chess interactions failed; details saved in puzzles.csv. Rerun the same command to resume."
         )

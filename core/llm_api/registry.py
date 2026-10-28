@@ -16,10 +16,27 @@ from omegaconf import OmegaConf
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "models.yaml"
 
 
+class CatalogLoader(yaml.SafeLoader):
+    """Reject silent YAML overrides while retaining ordinary YAML merge support."""
+
+    def construct_mapping(self, node, deep=False):
+        keys = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
+            key = self.construct_object(key_node, deep=deep)
+            if key in keys:
+                raise ValueError(
+                    f"Duplicate model catalog key {key!r} at line {key_node.start_mark.line + 1}"
+                )
+            keys.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 @lru_cache(maxsize=8)
 def _load(path: str):
     with open(path) as stream:
-        config = yaml.safe_load(stream)
+        config = yaml.load(stream, Loader=CatalogLoader)
     for section in ("roles", "profiles", "models"):
         if not isinstance(config.get(section), dict):
             raise ValueError(f"Model config requires a {section} mapping: {path}")

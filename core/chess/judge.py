@@ -21,7 +21,7 @@ from core.prompts import load_template
 LOGGER = logging.getLogger(__name__)
 
 
-def load_transcripts(directory):
+def load_transcripts(directory, allow_empty=False):
     if directory is None:
         raise ValueError("Specify transcripts_dir for chess judging")
     directory = Path(directory)
@@ -82,18 +82,31 @@ def load_transcripts(directory):
                     proposer=row.model,
                     proposer_correct=label == "true",
                     final_move=row.final_move,
+                    **{
+                        key: row[key]
+                        for key in (
+                            "target_judge",
+                            "condition",
+                            "num_rounds",
+                            "questioner",
+                            "proposal_id",
+                            "proposal_valid",
+                            "interaction_valid",
+                        )
+                        if key in frame
+                    },
                     # Re-render older interaction transcripts to exclude legacy tool events.
                     model_response=format_transcript(json.loads(row.transcript))
                     if "transcript" in frame
                     else row.model_response,
                 )
             )
-    if not sources:
+    if not sources and not allow_empty:
         raise ValueError(f"No completed chess transcripts found in {directory}")
     return sources
 
 
-async def run_judging(cfg, api, sources=None, pairs=None):
+async def run_judging(cfg, api, sources=None, pairs=None, prompt_template=None):
     # Import lazily: the experiment runner also dispatches to this module.
     from core.chess.run import model_directory
 
@@ -111,12 +124,14 @@ async def run_judging(cfg, api, sources=None, pairs=None):
         raise ValueError("Chess judging requires Chat, Responses, or Messages models")
     settings = dict(
         protocol="judge",
-        transcript_content="public_text_only_v1",
+        transcript_content="final_public_argument_anonymous_v2",
         use_tools=True,
         max_tokens=cfg.max_tokens,
         max_tool_rounds=cfg.max_tool_rounds,
         temperature=cfg.temperature,
-        prompt=load_template("chess_judge"),
+        prompt=prompt_template
+        if prompt_template is not None
+        else load_template("chess_judge"),
         tool=CHESS_TOOLS,
         sources=sources,
     )
@@ -127,7 +142,10 @@ async def run_judging(cfg, api, sources=None, pairs=None):
     frames, files, pending, profiles = {}, {}, [], []
     for model in judges:
         selected = [
-            s for s in sources if pairs is None or (s["proposer"], model) in pairs
+            s
+            for s in sources
+            if (pairs is None or (s["proposer"], model) in pairs)
+            and s.get("target_judge", model) == model
         ]
         # Keep different proposers' caches and records separate, even for the same puzzle.
         for source in dict.fromkeys(s["source"] for s in selected):
@@ -169,6 +187,18 @@ async def run_judging(cfg, api, sources=None, pairs=None):
                             proposer_correct=s["proposer_correct"],
                             proposed_solution=s["final_move"],
                             source=source,
+                            **{
+                                key: s[key]
+                                for key in (
+                                    "condition",
+                                    "num_rounds",
+                                    "questioner",
+                                    "proposal_id",
+                                    "proposal_valid",
+                                    "interaction_valid",
+                                )
+                                if key in s
+                            },
                             complete=False,
                             correct=False,
                             judgement="",
@@ -206,6 +236,7 @@ async def run_judging(cfg, api, sources=None, pairs=None):
                 cfg.max_tokens,
                 cfg.max_tool_rounds,
                 cfg.temperature,
+                prompt_template=settings["prompt"],
             )
             frame = frames[key]
             for field, value in result.items():

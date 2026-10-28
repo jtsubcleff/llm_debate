@@ -44,37 +44,6 @@ is seeded random sampling without replacement; all models receive the same
 sample. Default buckets are Low `<1300`, Medium `1300–2300` inclusive, and
 High `>2300`.
 
-Experiments start immediately after local configuration and data validation;
-there is no pre-run cost estimate or confirmation prompt. The end-of-run summary
-reports cost estimates from recorded token usage and saved per-puzzle costs.
-
-OpenRouter calls default to a 600-second timeout per attempt (OpenAI calls
-retain 120 seconds). Override it in a chess command with
-`openrouter_timeout=300`, for example. The timeout applies to both the local
-deadline and SDK request, and must be positive. Existing retry counts still
-apply, so repeated failures can take longer to finish. This setting can change
-when resuming the same `exp_dir` without invalidating caches.
-
-For OpenRouter models, optionally add `reasoning_effort` to the model entry in
-`core/config/models.yaml` (or the catalog selected by `LLM_MODELS_CONFIG`):
-
-```yaml
-  openrouter_gpt_oss_20b:
-    id: openai/gpt-oss-20b
-    profile: openrouter_chat
-    reasoning_effort: low
-    # Keep the entry's existing prices and other metadata.
-```
-
-GPT-OSS supports `low`, `medium`, and `high`. The gateway also accepts `none`,
-`minimal`, `xhigh`, and `max` for models that support those levels; model/provider
-support varies. Omitting the field or setting it to `null` sends no effort
-override. The adapter sends this as OpenRouter's `reasoning.effort`, preserving
-configured routing and usage reporting. This convenience field currently applies
-only to OpenRouter; other providers retain their existing `request_defaults`.
-Changing effort changes the pinned model profile: use a new `exp_dir` so the
-runner does not mix previous cached answers with a different reasoning setting.
-See [OpenRouter reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
 
 The default input is `chess_data/lichess_puzzles.csv`; override `dataset_path`
 for another prepared CSV. Required columns are `PuzzleId,FEN,Moves,Rating`.
@@ -82,6 +51,75 @@ for another prepared CSV. Required columns are `PuzzleId,FEN,Moves,Rating`.
 solution in UCI. The repository's preparation script has already played and
 removed the opponent's setup move. Do not pass a raw Lichess database directly.
 The loader validates positions and solution sequences.
+
+## Matched end-to-end research suite
+
+Run all four research conditions on the same puzzles and the same opening proposals:
+
+```bash
+python -m core.chess.run protocol=research_suite \
+  models='[[openrouter_gpt_oss_120b,openrouter_gpt_oss_20b]]' \
+  num_rounds=3 limit=30 seed=42 exp_dir=./exp/chess_research
+```
+
+Every entry is an explicit `[proposer, judge]` pair. The critic uses the proposer's
+exact profile; in multi-round consultancy the questioner uses the final judge's
+exact profile in a separate conversation. This command runs generation, judging,
+and scoring. To run just one condition end-to-end, add, for example,
+`suite_conditions='[single_debate]'`. Available conditions are:
+
+| Condition | Transcript assessed by final judge |
+| --- | --- |
+| `single_consultancy` | One proposal and its supporting argument |
+| `multi_consultancy` | `num_rounds` proposer responses; `num_rounds - 1` questions |
+| `single_debate` | One proposal followed by one critic audit |
+| `multi_debate` | `num_rounds` proposer arguments and `num_rounds` critic audits |
+
+Multi-round conditions require `num_rounds >= 2`. One mode-neutral opening is
+generated per proposer/puzzle and reused across judges and conditions. Shorter
+conditions are exact prefixes of longer interactions; agents are not told the
+future round count. Final judging is a fresh call for each condition. This removes
+variation in the proposed move and first argument as a confound.
+
+Shared evidence contains only each agent turn's final public response. Tool-loop
+commentary, calls/results, private reasoning, and participant model names are
+excluded. Audit traces and model identities remain available in saved records.
+The opening prompt is identical in all conditions. Role prompts ask for concise
+new evidence; public responses use the word limits below, with truncation recorded
+in per-turn metrics. The final judge receives
+only the original FEN, locked move, and public transcript, not the reference move
+or correctness label.
+
+Outputs under the suite directory:
+
+- `chess_suite.json`: exact sample, resolved profiles, prompts, settings, tool
+  definitions, sharing policy, source-code hashes, and Python/library versions. Relevant changes require
+  a new `exp_dir`. Prompts are frozen in memory for the duration of the run.
+- `_work/`: reusable proposal and longest-interaction checkpoints/caches.
+- `conditions/<condition>/`: public transcripts, full audit traces, and separate
+  final judgements. Per-turn metrics mark reused openings.
+- `evaluations.csv`: one row per planned condition/proposer/judge/puzzle, including
+  missing judgements and a shared `proposal_id` for matching.
+- `results.csv`: per-condition/model-pair coverage, accuracy, matched-cohort
+  accuracy, class counts, TP/TN/FP/FN, invalid outputs, and balanced accuracy.
+  Percentages use 0–100. Balanced accuracy is undefined when either class is absent.
+- `costs.csv`: recorded usage/cost from each unique functional response cache,
+  counted once despite proposal/prefix reuse; unknown-cost calls are explicit.
+
+Rerun the same command to resume without regenerating successful calls. A transient
+failure leaves incomplete work visible in the planned denominator. Matched accuracy
+uses only puzzle IDs judged in every selected condition for that model pair.
+Refused, truncated, or missing opening answers are counted as invalid proposals;
+they do not trigger follow-ups or misleading final-judge labels. Malformed/truncated
+final judgements still count as incorrect completed judge evaluations. Truncated
+intermediate arguments retain the existing completion behavior and are flagged
+in interaction validity metrics. Per-condition usage includes its logical shared
+opening; use suite `costs.csv` for total recorded expenditure. Provider retries
+without returned usage may incur additional unrecorded costs.
+
+The original independent protocol commands below remain available. Use the suite
+for matched comparisons. See [the design review](reports/chess_experiment_review.md)
+for the changes, validation, and interpretation limits.
 
 ## Sequential debate and consultancy
 
@@ -120,7 +158,8 @@ proposer answers. The proposer has the last word: `num_rounds` proposer turns
 and `num_rounds - 1` questioner turns. `num_rounds=1` produces only the opening
 proposal. Questioner selection requires explicit pairs, including when both
 agents use the same model. Different pairs have separate caches and result rows;
-the proposer opening is generated independently for each pair. Questioning does
+the proposer opening is generated independently for each pair in these standalone
+commands (the research suite shares it). Questioning does
 not make a final Yes/No decision; final judging uses the existing separate command.
 
 The proposed move is locked when the opening proposer's tool-assisted turn
@@ -130,13 +169,41 @@ correctness label. Final judging measures the judge's decision about that locked
 move, separately from proposal accuracy.
 
 Both modes rely on native provider reasoning for private thinking. Visible
-responses are public arguments or questions shared with other participants and
+final responses are public arguments or questions shared with other participants and
 the final judge; the prompts do not ask models to generate thinking tags.
 Structured tool calls and tool results stay private to the model's own tool
 conversation. Agents should describe useful findings in their public arguments
 when another participant needs them. As a defensive fallback, the transcript
 filter still excludes any `<thinking>` content emitted by a model, including
 unclosed tags spanning tool responses.
+
+Public word limits are shared across the suite and standalone chess protocols:
+
+| Response | Prompt instruction | Enforced maximum |
+| --- | ---: | ---: |
+| Initial solve in any format, including Direct QA | 300 words | 350 words |
+| Later debate proposer arguments and every critic argument | 150 words | 200 words |
+| Later consultancy proposer responses | 300 words | 350 words |
+| Consultancy questioner | 300 words | 350 words |
+
+Limits count whitespace-separated words in the final public response, excluding
+private thinking and tool-loop commentary. For an overlong opening, retain the
+first 349 words and reappend the original final token as word 350. This preserves
+the selected move without changing the original response's correctness or fixing
+malformed answers. Later arguments are cut at their hard maximum. There is no
+extra truncation marker consuming words. Shorter responses retain their formatting.
+
+The policy is set in `core/chess/word_limits.py` and pinned in run manifests.
+The prompts receive the corresponding instruction limits. `turn_metrics` records
+`prompt_word_limit`, `public_word_limit`, `public_words_original`, `public_words`,
+and `public_truncated`; `public_truncated_turns` summarizes each interaction.
+Direct QA records the same length fields directly in its result row and shares
+only its bounded final public solution with later judges. Full original responses
+remain in audit traces and functional caches. Intentional word truncation does
+not make a response invalid; provider token truncation retains its existing
+invalidity/scoring rules. Existing run directories must not be reused after this
+policy change. The word caps affect public evidence, not the generation token
+budget or already incurred API usage.
 
 Each agent turn has its own `max_tool_rounds`, with `max_tokens` per API call.
 Both agents receive the existing chess tools unless `use_tools=false`.
@@ -158,9 +225,12 @@ full provider replay state. Private audit traces are excluded when these outputs
 are loaded for final judging. Consultancy summaries group by proposer/questioner
 pair; debate summaries group by proposer model. Changing rounds, prompts, tools,
 generation settings, or model profiles requires a new experiment directory.
+New transcripts omit model names from the rendered evidence and omit intermediate
+tool-loop commentary; the raw audit trace retains it. The current prompt builder
+uses explicit context/tool/role sections instead of splitting Direct QA prose.
 
-The protocol and public-transcript filter are in
-`core/chess/protocols/interaction.py`; experiment orchestration
+The protocol is in `core/chess/protocols/interaction.py`, and shared private-text
+filtering is in `core/chess/public_text.py`; experiment orchestration
 are in `core/chess/interaction.py`; role prompts are in
 `core/config/prompts/chess_interaction.yaml`. Opening-move scoring reuses Direct
 QA's SAN rules. The existing judge and rescoring commands consume saved outputs
@@ -212,7 +282,9 @@ Standalone judgements are saved under
 `correct`, tool traces, usage, and costs. `exp_dir/results.csv` groups all judged
 sources by judge model; `accuracy` is the percentage of correct decisions (0–100).
 The existing `Low`, `Medium`, `High`, and `all` columns remain fractions (0–1).
-Only completed judgements enter these denominators.
+Only completed judgements enter these denominators. `pair_results.csv` additionally
+separates proposer/judge pairs and interaction conditions when that metadata is
+available. Research-suite summaries contain class and matched-cohort metrics.
 
 Paired runs solve each distinct proposer once on the shared balanced sample and
 judge only the requested pairs. Proposer results stay in the usual locations;
@@ -329,7 +401,49 @@ python -m core.chess.rescore exp/chess_comparison --write
 python -m core.chess.rescore exp/chess_judged_haiku --protocol judge --write
 ```
 
+## Timeouts and Reasoning Effort
+
+
+OpenRouter calls default to a 600-second timeout per attempt (OpenAI calls
+retain 120 seconds). Override it in a chess command with
+`openrouter_timeout=300`, for example. The timeout applies to both the local
+deadline and SDK request, and must be positive. Existing retry counts still
+apply, so repeated failures can take longer to finish. This setting can change
+when resuming the same `exp_dir` without invalidating caches.
+
+For OpenRouter models, optionally add `reasoning_effort` to the model entry in
+`core/config/models.yaml` (or the catalog selected by `LLM_MODELS_CONFIG`):
+
+```yaml
+  openrouter_gpt_oss_20b:
+    id: openai/gpt-oss-20b
+    profile: openrouter_chat
+    reasoning_effort: low
+    # Keep the entry's existing prices and other metadata.
+```
+
+GPT-OSS supports `low`, `medium`, and `high`. The gateway also accepts `none`,
+`minimal`, `xhigh`, and `max` for models that support those levels; model/provider
+support varies. Omitting the field or setting it to `null` sends no effort
+override. The adapter sends this as OpenRouter's `reasoning.effort`, preserving
+configured routing and usage reporting. This convenience field currently applies
+only to OpenRouter; other providers retain their existing `request_defaults`.
+Changing effort changes the pinned model profile: use a new `exp_dir` so the
+runner does not mix previous cached answers with a different reasoning setting.
+See [OpenRouter reasoning controls](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+
 ## Visualize
+
+For a full research suite, open [scripts/plot_chess_suite.ipynb](scripts/plot_chess_suite.ipynb),
+set `EXP_DIR` to the directory containing `chess_suite.json`, and run all cells.
+It compares the four conditions separately for each proposer/judge pair, including
+matched-cohort accuracy, coverage, paired improvements/regressions, false accepts
+and rejects, difficulty buckets, and recorded costs without double-counting reused
+work. Its puzzle viewer shows the board, public interaction, and final judgement
+for each condition, preferring the exact transcript pinned for judging. Partial
+runs and absent classes display unavailable rates as N/A. Set `SAVE_FIGURES=True`
+to export PNGs under `<EXP_DIR>/figures/suite/`; loading and analysis never make
+model requests or modify result files.
 
 For judge evaluations, open [scripts/plot_chess_judge.ipynb](scripts/plot_chess_judge.ipynb),
 set `EXP_DIR`, and run all cells. It accepts standalone judge or end-to-end

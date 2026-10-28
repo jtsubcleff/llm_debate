@@ -14,6 +14,7 @@ from omegaconf import DictConfig
 from core.chess.protocols.direct_qa import prompt_template_name, run_direct_qa
 from core.chess.results import aggregate_results, print_run_cost, write_csv, write_json
 from core.chess.tools import CHESS_TOOLS, TOOL_COUNT_FIELDS
+from core.chess.word_limits import PUBLIC_WORD_LIMITS
 from core.llm_api.llm import ModelAPI
 from core.llm_api.registry import resolve_model
 from core.load.chess import load_puzzles, sample_puzzles
@@ -40,6 +41,10 @@ async def run_experiment(cfg, api):
 
 
 async def _run_experiment(cfg, api):
+    if cfg.protocol == "research_suite":
+        from core.chess.suite import run_suite
+
+        return await run_suite(cfg, api)
     if cfg.protocol in ("debate", "consultancy"):
         from core.chess.interaction import run_interactions
 
@@ -70,6 +75,7 @@ async def _run_experiment(cfg, api):
     # Adding another model is supported; changing a run's semantics is rejected.
     settings = dict(
         protocol=cfg.protocol,
+        word_limits=PUBLIC_WORD_LIMITS,
         use_tools=cfg.use_tools,
         seed=cfg.seed,
         limit=cfg.limit,

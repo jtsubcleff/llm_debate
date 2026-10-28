@@ -6,6 +6,7 @@ from pathlib import Path
 
 import chess
 
+from core.chess.public_text import public_turn
 from core.chess.results import write_json
 from core.chess.tools import (
     CHESS_TOOLS,
@@ -13,6 +14,7 @@ from core.chess.tools import (
     display_board_unicode,
     validate_move_sequence,
 )
+from core.chess.word_limits import PUBLIC_WORD_LIMITS, limit_public_response
 from core.llm_api.base_llm import LLMResponse, StopReason
 from core.llm_api.errors import request_id_from_error
 from core.llm_api.tool_calls import assistant_message
@@ -65,7 +67,16 @@ async def run_direct_qa(
     use_tools=True,
 ):
     messages = [
-        dict(role=m["role"], content=render(m["content"], {"FEN": puzzle.FEN}))
+        dict(
+            role=m["role"],
+            content=render(
+                m["content"],
+                {
+                    "FEN": puzzle.FEN,
+                    "WORD_LIMIT": PUBLIC_WORD_LIMITS["opening"]["prompt"],
+                },
+            ),
+        )
         for m in load_template(prompt_template_name(use_tools))["messages"]
     ]
     result = await run_chess_turns(
@@ -83,6 +94,17 @@ async def run_direct_qa(
     )
     result["final_move"] = result.pop("final_answer")
     result["expected_move"] = puzzle.expected_move
+    trace = json.loads(result["tool_trace"])
+    responses = [e for e in trace if "completion" in e]
+    _, public_text = public_turn(trace)
+    if not responses or responses[-1].get("tool_calls"):
+        public_text = ""
+    # Preserve the original final token for scoring; expose only the bounded
+    # final public solution to later judges, not tool-loop scratch commentary.
+    result["model_response"], length_metrics = limit_public_response(
+        public_text, PUBLIC_WORD_LIMITS["opening"], preserve_final_token=True
+    )
+    result.update(length_metrics)
     return result
 
 

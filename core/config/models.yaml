@@ -9,7 +9,7 @@
 # These are not dates of final post-training completion or guarantees against data leakage.
 # ESTIMATE comments identify uncertain, conflicting, or family-inferred dates.
 roles:
-  debater: openrouter_gpt_oss_120b
+  debater: openrouter_gpt_oss_20b
   correct_debater: debater
   incorrect_debater: debater
   judge: openrouter_gpt_oss_20b
@@ -28,10 +28,14 @@ groups:
   - anthropic_strong
   - openrouter_gpt_oss_20b
   - openrouter_gpt_oss_120b
+  - openrouter_gpt_oss_20b
+  - openrouter_gpt_oss_120b
   judges:
   - judge_4o_mini
   - judge_41_mini
   - judge_5_mini
+  - openrouter_gpt_oss_20b
+  - openrouter_gpt_oss_120b
   - openrouter_gpt_oss_20b
   - openrouter_gpt_oss_120b
 profiles:
@@ -51,9 +55,6 @@ profiles:
     multiple_completions: false
     tokenizer: o200k_base
     default_max_tokens: 8192
-    request_defaults:
-      reasoning:
-        effort: low
   openai_base:
     provider: openai
     endpoint: completions

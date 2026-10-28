@@ -1,5 +1,6 @@
 """Binary final judgement of a chess proposal using the shared chess tools."""
 
+import json
 import string
 import unicodedata
 
@@ -49,11 +50,16 @@ async def run_judge(
     max_tokens=8192,
     max_tool_rounds=10,
     temperature=0.2,
+    prompt_template=None,
 ):
     variables = judge_variables(puzzle, proposal)
     messages = [
         dict(role=m["role"], content=render(m["content"], variables))
-        for m in load_template("chess_judge")["messages"]
+        for m in (
+            prompt_template
+            if prompt_template is not None
+            else load_template("chess_judge")
+        )["messages"]
     ]
     result = await run_chess_turns(
         api,
@@ -69,4 +75,10 @@ async def run_judge(
         True,
     )
     result["judgement"] = result.pop("final_answer")
+    responses = [e for e in json.loads(result["tool_trace"]) if "completion" in e]
+    result["verdict_valid"] = bool(
+        result["judgement"] in ("Yes", "No")
+        and responses
+        and responses[-1]["stop_reason"] == "STOP_SEQUENCE"
+    )
     return result

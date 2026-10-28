@@ -5,15 +5,12 @@ text crosses agent boundaries; tool traces and private reasoning stay local.
 """
 
 import json
-import re
 from pathlib import Path
 
-from core.chess.protocols.direct_qa import (
-    prompt_template_name,
-    run_chess_turns,
-    score_response,
-)
+from core.chess.protocols.direct_qa import run_chess_turns, score_response
+from core.chess.public_text import public_turn
 from core.chess.tools import TOOL_COUNT_FIELDS
+from core.chess.word_limits import limit_public_response, turn_word_limits
 from core.prompts import load_template, render
 
 
@@ -40,56 +37,6 @@ def turn_cache(cache_dir, index, role):
     return Path(cache_dir) / f"{index:03d}_{role}"
 
 
-def response_events(response):
-    """Use native block order when available (text can surround tool calls)."""
-    events = []
-    for block in response.get("response_items") or []:
-        kind = block.get("type")
-        if kind in ("text", "output_text"):
-            events.append(("text", block.get("text", "")))
-        elif kind == "message":
-            events.extend(
-                ("text", part.get("text", ""))
-                for part in block.get("content", [])
-                if part.get("type") in ("text", "output_text")
-            )
-        elif kind in ("tool_use", "function_call"):
-            events.append(("call", block.get("call_id", block.get("id"))))
-        # Native thinking/reasoning blocks are always private.
-    calls = response.get("tool_calls", [])
-    if "".join(value for kind, value in events if kind == "text") == response[
-        "completion"
-    ] and [value for kind, value in events if kind == "call"] == [
-        call["id"] for call in calls
-    ]:
-        return events
-    # Chat APIs provide one text field followed by structured calls.
-    return [("text", response["completion"])] + [("call", call["id"]) for call in calls]
-
-
-def public_turn(trace):
-    """Extract public text only; tools and thinking never cross agent boundaries."""
-    depth, public = 0, []
-    final_text = ""
-    for entry in trace:
-        if "completion" in entry:
-            final_parts = []
-            for kind, value in response_events(entry):
-                if kind == "call":
-                    continue
-                parts = re.split(r"(<\s*/?\s*thinking\s*>)", value, flags=re.I)
-                for part in parts:
-                    if re.fullmatch(r"<\s*thinking\s*>", part, re.I):
-                        depth += 1
-                    elif re.fullmatch(r"<\s*/\s*thinking\s*>", part, re.I):
-                        depth = max(0, depth - 1)
-                    elif depth == 0 and part:
-                        final_parts.append(part)
-                        public.append(dict(type="text", text=part))
-            final_text = "".join(final_parts)
-    return public, final_text
-
-
 def format_transcript(transcript):
     """Render text only, including when reading older transcripts with tool events."""
     sections = []
@@ -99,8 +46,7 @@ def format_transcript(transcript):
             if event["type"] == "text":
                 events.append(event["text"])
         sections.append(
-            f"Round {turn['round']} — {turn['role']} ({turn['model']}):\n"
-            + "\n".join(events)
+            f"Round {turn['round']} — {turn['role']}:\n" + "\n".join(events)
         )
     return "\n\n".join(sections)
 
@@ -119,22 +65,27 @@ def score_proposal(puzzle, trace):
     return move, bool(correct and normal_stop)
 
 
-def interaction_messages(mode, role, puzzle, transcript, move, use_tools):
+def interaction_messages(
+    mode, role, puzzle, transcript, move, use_tools, instructions=None
+):
     opening = not transcript
-    template = load_template(prompt_template_name(use_tools))
-    messages = [
-        dict(role=m["role"], content=render(m["content"], {"FEN": puzzle.FEN}))
-        for m in template["messages"]
-    ]
-    instructions = load_template("chess_interaction")
-    # Keep the existing tool descriptions, but the SAN output contract applies
-    # only to the opening proposer. Later turns are arguments or questions.
-    base = messages[0]["content"].split("Finish your response")[0]
-    messages[0]["content"] = base + "\n" + instructions["privacy"] + "\n"
-    key = "opening_" + mode if opening else role + "_" + mode
-    messages[0]["content"] += instructions[key]
+    limits = turn_word_limits(mode, role, opening)
+    instructions = (
+        instructions if instructions is not None else load_template("chess_interaction")
+    )
+    system = instructions["context"] + "\n" + instructions["privacy"]
+    if use_tools:
+        system += "\n" + instructions["tools"]
+    key = "opening" if opening else role + "_" + mode
+    variables = {"WORD_LIMIT": limits["prompt"]}
+    system += "\n" + render(instructions[key], variables)
+    messages = [dict(role="system", content=system), dict(role="user", content="")]
     if opening:
-        messages[1]["content"] += "\n" + instructions["opening_answer"]
+        messages[1][
+            "content"
+        ] = f"Find the best move in this position:\nFEN: {puzzle.FEN}\n" + render(
+            instructions["opening_answer"], variables
+        )
     else:
         request = "questions." if role == "questioner" else "argument."
         messages[1]["content"] = (
@@ -143,6 +94,75 @@ def interaction_messages(mode, role, puzzle, transcript, move, use_tools):
             f"Provide your next {request}"
         )
     return messages
+
+
+METRIC_FIELDS = (*TOOL_COUNT_FIELDS, "input_tokens", "output_tokens", "api_calls")
+
+
+def interaction_result(
+    transcript,
+    trace,
+    turns,
+    puzzle,
+    move,
+    correct,
+    use_tools,
+    num_rounds,
+    expected_turns,
+):
+    """Build full or prefix results without duplicating generation or accounting."""
+    opening_responses = [
+        e
+        for e in trace
+        if e.get("round") == 1 and e.get("role") == "proposer" and "completion" in e
+    ]
+    stop = opening_responses[-1]["stop_reason"] if opening_responses else ""
+    return dict(
+        **{field: sum(t[field] for t in turns) for field in METRIC_FIELDS},
+        cost=None
+        if any(t["cost"] is None for t in turns)
+        else sum(t["cost"] for t in turns),
+        use_tools=use_tools,
+        num_rounds=num_rounds,
+        final_move=move,
+        expected_move=puzzle.expected_move,
+        correct=bool(correct),
+        proposal_valid=bool(move) and stop == "STOP_SEQUENCE",
+        interaction_valid=all(t["valid_response"] for t in turns),
+        complete=len(turns) == expected_turns and bool(turns[-1]["complete"]),
+        error=turns[-1]["error"],
+        request_id=turns[-1]["request_id"],
+        model_response=format_transcript(transcript),
+        transcript=json.dumps(transcript),
+        tool_trace=json.dumps(trace),
+        turn_metrics=json.dumps(turns),
+        public_truncated_turns=sum(t.get("public_truncated", False) for t in turns),
+    )
+
+
+def interaction_prefix(result, puzzle, mode, num_rounds):
+    """A shorter condition is an exact prefix of an unannounced longer run."""
+    count = len(turn_schedule(mode, num_rounds))
+    transcript = json.loads(result["transcript"])[:count]
+    for turn, (round_number, role) in zip(transcript, turn_schedule(mode, num_rounds)):
+        if (turn["round"], turn["role"]) != (round_number, role):
+            raise ValueError("Transcript does not match the requested interaction mode")
+    turns = json.loads(result["turn_metrics"])[:count]
+    slots = {(t["round"], t["role"]) for t in transcript}
+    trace = [
+        e for e in json.loads(result["tool_trace"]) if (e["round"], e["role"]) in slots
+    ]
+    return interaction_result(
+        transcript,
+        trace,
+        turns,
+        puzzle,
+        result["final_move"],
+        result["correct"],
+        result["use_tools"],
+        num_rounds,
+        count,
+    )
 
 
 async def run_interaction(
@@ -157,32 +177,84 @@ async def run_interaction(
     max_tool_rounds=10,
     temperature=0.2,
     use_tools=True,
+    opening_result=None,
+    instructions=None,
 ):
     schedule = turn_schedule(mode, num_rounds)
     if mode == "consultancy" and not questioner_model:
         raise ValueError("Consultancy requires an explicit questioner model")
     transcript, trace, turns = [], [], []
     move, correct = "", False
+    instructions = (
+        instructions if instructions is not None else load_template("chess_interaction")
+    )
+    if opening_result is not None:
+        opening_transcript = json.loads(opening_result["transcript"])
+        if len(opening_transcript) != 1 or opening_transcript[0]["role"] != "proposer":
+            raise ValueError("A reused opening must contain exactly one proposer turn")
     for index, (round_number, role) in enumerate(schedule):
         agent_model = questioner_model if role == "questioner" else model
-        messages = interaction_messages(mode, role, puzzle, transcript, move, use_tools)
-        result = await run_chess_turns(
-            api,
-            agent_model,
-            puzzle,
-            turn_cache(cache_dir, index, role),
-            messages,
-            lambda text: ("", False),
-            "Tool budget exhausted. Finish your response now."
-            + (" End with only your selected SAN move." if index == 0 else ""),
-            max_tokens,
-            max_tool_rounds,
-            temperature,
-            use_tools,
+        messages = interaction_messages(
+            mode, role, puzzle, transcript, move, use_tools, instructions
         )
-        turns.append(result)
+        if index == 0 and opening_result is not None:
+            result = dict(opening_result)
+            result["tool_trace"] = json.dumps(
+                [
+                    {k: v for k, v in e.items() if k not in ("round", "role", "model")}
+                    for e in json.loads(result["tool_trace"])
+                ]
+            )
+        else:
+            result = await run_chess_turns(
+                api,
+                agent_model,
+                puzzle,
+                turn_cache(cache_dir, index, role),
+                messages,
+                lambda text: ("", False),
+                "Tool budget exhausted. Finish your response now."
+                + (" End with only your selected SAN move." if index == 0 else ""),
+                max_tokens,
+                max_tool_rounds,
+                temperature,
+                use_tools,
+            )
         raw = json.loads(result["tool_trace"])
-        events, _ = public_turn(raw)
+        _, public_text = public_turn(raw)
+        limits = turn_word_limits(mode, role, opening=index == 0)
+        public_text, length_metrics = limit_public_response(
+            public_text, limits, preserve_final_token=index == 0
+        )
+        responses = [e for e in raw if "completion" in e]
+        has_final = bool(responses) and not responses[-1].get("tool_calls")
+        # Tool-loop preambles and scratch commentary are local. Share one final
+        # self-contained argument/question per agent turn, never tool chatter.
+        events = (
+            [dict(type="text", text=public_text)]
+            if has_final and public_text.strip()
+            else []
+        )
+        turns.append(
+            dict(
+                **{
+                    field: result[field]
+                    for field in (
+                        *METRIC_FIELDS,
+                        "cost",
+                        "complete",
+                        "error",
+                        "request_id",
+                    )
+                },
+                valid_response=has_final
+                and bool(public_text.strip())
+                and responses[-1]["stop_reason"] == "STOP_SEQUENCE",
+                reused=index == 0 and opening_result is not None,
+                stop_reason=responses[-1]["stop_reason"] if responses else "",
+                **length_metrics,
+            )
+        )
         transcript.append(
             dict(
                 round=round_number,
@@ -199,28 +271,14 @@ async def run_interaction(
             move, correct = score_proposal(puzzle, raw)
         if not result["complete"]:
             break
-    return dict(
-        **{
-            field: sum(t[field] for t in turns)
-            for field in (
-                *TOOL_COUNT_FIELDS,
-                "input_tokens",
-                "output_tokens",
-                "api_calls",
-            )
-        },
-        cost=None
-        if any(t["cost"] is None for t in turns)
-        else sum(t["cost"] for t in turns),
-        use_tools=use_tools,
-        num_rounds=num_rounds,
-        final_move=move,
-        expected_move=puzzle.expected_move,
-        correct=bool(correct),
-        complete=len(turns) == len(schedule) and turns[-1]["complete"],
-        error=turns[-1]["error"],
-        request_id=turns[-1]["request_id"],
-        model_response=format_transcript(transcript),
-        transcript=json.dumps(transcript),
-        tool_trace=json.dumps(trace),
+    return interaction_result(
+        transcript,
+        trace,
+        turns,
+        puzzle,
+        move,
+        correct,
+        use_tools,
+        num_rounds,
+        len(schedule),
     )
